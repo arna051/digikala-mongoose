@@ -23,6 +23,9 @@ import type {
   PublicationRecord,
   VariantDraftRecord,
 } from './types.js';
+import { DigikalaConfigurationError } from './errors.js';
+
+export const CURRENT_DIGIKALA_SCHEMA_VERSION = 1;
 
 function zodValidator(schema: {
   safeParse(value: unknown): { success: boolean };
@@ -38,8 +41,20 @@ function existingOrCreate<T>(
   name: string,
   schema: Schema,
 ): Model<T> {
-  return ((connection.models[name] as Model<T> | undefined) ??
-    connection.model(name, schema)) as Model<T>;
+  const existing = connection.models[name] as Model<T> | undefined;
+  if (existing) {
+    const expectedCollection = schema.options.collection;
+    if (
+      expectedCollection &&
+      existing.collection.collectionName !== expectedCollection
+    ) {
+      throw new DigikalaConfigurationError(
+        `model ${name} is already registered for ${existing.collection.collectionName}, not ${expectedCollection}`,
+      );
+    }
+    return existing;
+  }
+  return connection.model(name, schema) as Model<T>;
 }
 
 export function createDigikalaModels(
@@ -51,6 +66,12 @@ export function createDigikalaModels(
     collectionPrefix = 'digikala_',
     autoCreateIndexes = true,
   } = options;
+  if (!modelPrefix.trim()) {
+    throw new DigikalaConfigurationError('modelPrefix must not be empty');
+  }
+  if (!collectionPrefix.trim()) {
+    throw new DigikalaConfigurationError('collectionPrefix must not be empty');
+  }
   const shared = {
     timestamps: true,
     strict: true as const,
@@ -60,6 +81,11 @@ export function createDigikalaModels(
 
   const productSchema = new Schema<ProductDraftRecord>(
     {
+      schemaVersion: {
+        type: Number,
+        required: true,
+        default: CURRENT_DIGIKALA_SCHEMA_VERSION,
+      },
       key: { type: String, required: true, trim: true },
       status: {
         type: String,
@@ -115,6 +141,11 @@ export function createDigikalaModels(
 
   const variantSchema = new Schema<VariantDraftRecord>(
     {
+      schemaVersion: {
+        type: Number,
+        required: true,
+        default: CURRENT_DIGIKALA_SCHEMA_VERSION,
+      },
       key: { type: String, required: true, trim: true },
       productId: {
         type: Schema.Types.ObjectId,
@@ -143,6 +174,11 @@ export function createDigikalaModels(
 
   const categoryRuleSchema = new Schema<CategoryRuleRecord>(
     {
+      schemaVersion: {
+        type: Number,
+        required: true,
+        default: CURRENT_DIGIKALA_SCHEMA_VERSION,
+      },
       categoryId: { type: Number, required: true },
       version: { type: String, required: true },
       title: String,
@@ -173,6 +209,11 @@ export function createDigikalaModels(
 
   const publicationSchema = new Schema<PublicationRecord>(
     {
+      schemaVersion: {
+        type: Number,
+        required: true,
+        default: CURRENT_DIGIKALA_SCHEMA_VERSION,
+      },
       panelKey: { type: String, required: true, trim: true },
       productId: {
         type: Schema.Types.ObjectId,
@@ -188,6 +229,22 @@ export function createDigikalaModels(
         required: true,
         default: 'not_published',
         enum: PublicationStatusSchema.options,
+      },
+      statusHistory: {
+        type: [
+          new Schema(
+            {
+              status: {
+                type: String,
+                required: true,
+                enum: PublicationStatusSchema.options,
+              },
+              at: { type: Date, required: true },
+            },
+            { _id: false },
+          ),
+        ],
+        default: [],
       },
       remoteProductId: Number,
       remoteDraftProductId: Number,
@@ -223,6 +280,11 @@ export function createDigikalaModels(
 
   const workflowSchema = new Schema<CreationWorkflowRecord>(
     {
+      schemaVersion: {
+        type: Number,
+        required: true,
+        default: CURRENT_DIGIKALA_SCHEMA_VERSION,
+      },
       panelKey: { type: String, required: true, trim: true },
       productId: {
         type: Schema.Types.ObjectId,
@@ -275,4 +337,27 @@ export async function ensureDigikalaIndexes(
   await Promise.all(
     Object.values(models).map((model) => model.createIndexes()),
   );
+}
+
+export async function migrateDigikalaData(
+  models: DigikalaMongooseModels,
+): Promise<{ migratedDocuments: number; schemaVersion: number }> {
+  const results = await Promise.all(
+    Object.values(models).map((model) =>
+      model
+        .updateMany(
+          { schemaVersion: { $exists: false } },
+          { $set: { schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION } },
+          { runValidators: false },
+        )
+        .exec(),
+    ),
+  );
+  return {
+    migratedDocuments: results.reduce(
+      (total, result) => total + result.modifiedCount,
+      0,
+    ),
+    schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION,
+  };
 }

@@ -1,4 +1,8 @@
-import { createDigikalaModels, ensureDigikalaIndexes } from './models.js';
+import {
+  createDigikalaModels,
+  ensureDigikalaIndexes,
+  migrateDigikalaData,
+} from './models.js';
 import {
   createDigikalaRepositories,
   type DigikalaMongooseRepositories,
@@ -17,6 +21,8 @@ export interface DigikalaMongoose {
   repositories: DigikalaMongooseRepositories;
   standalone: DigikalaStandaloneOrchestrator;
   ensureIndexes(): Promise<void>;
+  migrate(): Promise<{ migratedDocuments: number; schemaVersion: number }>;
+  ensureReady(): Promise<{ migratedDocuments: number; schemaVersion: number }>;
 }
 
 export function createDigikalaMongoose(
@@ -27,7 +33,15 @@ export function createDigikalaMongoose(
   return {
     models,
     repositories,
-    standalone: createDigikalaStandaloneOrchestrator(repositories),
+    standalone: createDigikalaStandaloneOrchestrator(repositories, {
+      observer: options.observer,
+    }),
     ensureIndexes: () => ensureDigikalaIndexes(models),
+    migrate: () => migrateDigikalaData(models),
+    ensureReady: async () => {
+      const migration = await migrateDigikalaData(models);
+      await ensureDigikalaIndexes(models);
+      return migration;
+    },
   };
 }

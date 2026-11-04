@@ -2,7 +2,7 @@ import {
   CreationWorkflowStateSchema,
   type CreationWorkflowState,
 } from 'digikala/schemas';
-import type { ClientSession, Types } from 'mongoose';
+import { Types, type ClientSession, type FilterQuery } from 'mongoose';
 import {
   CategoryRuleInputSchema,
   ProductDraftInputSchema,
@@ -13,7 +13,11 @@ import {
   type PublicationInput,
   type VariantDraftInput,
 } from './contracts.js';
-import { DigikalaDocumentNotFoundError } from './errors.js';
+import {
+  DigikalaConcurrencyError,
+  DigikalaDocumentNotFoundError,
+  DigikalaDuplicateIdentityError,
+} from './errors.js';
 import {
   buildProductPublicationPayloads,
   buildVariantPublicationPayload,
@@ -23,9 +27,12 @@ import type {
   CreationWorkflowDocument,
   DigikalaMongooseModels,
   ProductDraftDocument,
+  ProductDraftRecord,
   ProductPublicationPayloads,
   PublicationDocument,
+  PublicationRecord,
   VariantDraftDocument,
+  VariantDraftRecord,
   VariantPublicationPayload,
 } from './types.js';
 import {
@@ -35,6 +42,104 @@ import {
 
 export interface MutationOptions {
   session?: ClientSession;
+}
+
+export type QueryOptions = MutationOptions;
+
+export interface PageOptions extends QueryOptions {
+  limit?: number;
+  after?: string;
+}
+
+export interface Page<T> {
+  items: T[];
+  nextCursor?: string;
+}
+
+export interface ProductListOptions extends PageOptions {
+  status?: ProductDraftInput['status'];
+  categoryId?: number;
+}
+
+export interface VariantListOptions extends PageOptions {
+  productId?: string | Types.ObjectId;
+  status?: VariantDraftInput['status'];
+}
+
+export interface PublicationListOptions extends PageOptions {
+  panelKey?: string;
+  productId?: string | Types.ObjectId;
+  status?: PublicationInput['status'];
+}
+
+function pagination(options: PageOptions): {
+  limit: number;
+  after?: Types.ObjectId;
+} {
+  const limit = options.limit ?? 50;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    throw new RangeError(
+      'Pagination limit must be an integer between 1 and 200',
+    );
+  }
+  if (options.after && !Types.ObjectId.isValid(options.after)) {
+    throw new TypeError('Pagination cursor must be a MongoDB ObjectId');
+  }
+  return {
+    limit,
+    ...(options.after ? { after: new Types.ObjectId(options.after) } : {}),
+  };
+}
+
+function page<T extends { _id: unknown }>(items: T[], limit: number): Page<T> {
+  const hasMore = items.length > limit;
+  const visible = hasMore ? items.slice(0, limit) : items;
+  return {
+    items: visible,
+    ...(hasMore ? { nextCursor: String(visible.at(-1)!._id) } : {}),
+  };
+}
+
+function isDuplicateKey(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as {
+    code?: number;
+    writeErrors?: Array<{ code?: number; err?: { code?: number } }>;
+  };
+  return (
+    candidate.code === 11000 ||
+    candidate.writeErrors?.some(
+      (item) => item.code === 11000 || item.err?.code === 11000,
+    ) === true
+  );
+}
+
+function translateWriteError(
+  error: unknown,
+  entity: string,
+  identifier: string,
+): never {
+  if (isDuplicateKey(error)) {
+    throw new DigikalaDuplicateIdentityError(entity, identifier, {
+      cause: error,
+    });
+  }
+  if (error instanceof Error && error.name === 'VersionError') {
+    throw new DigikalaConcurrencyError(entity, identifier, { cause: error });
+  }
+  throw error;
+}
+
+async function translatedWrite<T>(
+  operation: () => Promise<T>,
+  entity: string,
+  identifier: string,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    translateWriteError(error, entity, identifier);
+  }
 }
 
 export function productDraftInputFromDocument(
@@ -64,6 +169,34 @@ export function variantDraftInputFromDocument(
   };
 }
 
+export function publicationInputFromDocument(
+  document: PublicationDocument,
+): PublicationInput {
+  return {
+    panelKey: document.panelKey,
+    productId: String(document.productId),
+    ...(document.variantId ? { variantId: String(document.variantId) } : {}),
+    status: document.status,
+    ...(document.remoteProductId
+      ? { remoteProductId: document.remoteProductId }
+      : {}),
+    ...(document.remoteDraftProductId
+      ? { remoteDraftProductId: document.remoteDraftProductId }
+      : {}),
+    ...(document.remoteVariantId
+      ? { remoteVariantId: document.remoteVariantId }
+      : {}),
+    ...(document.supplierCode ? { supplierCode: document.supplierCode } : {}),
+    ...(document.payload === undefined ? {} : { payload: document.payload }),
+    ...(document.payloadHash ? { payloadHash: document.payloadHash } : {}),
+    ...(document.lastError ? { lastError: document.lastError } : {}),
+    ...(document.synchronizedAt
+      ? { synchronizedAt: document.synchronizedAt }
+      : {}),
+    ...(document.metadata ? { metadata: document.metadata } : {}),
+  };
+}
+
 export class ProductDraftRepository {
   constructor(
     private readonly models: DigikalaMongooseModels,
@@ -75,25 +208,68 @@ export class ProductDraftRepository {
     options: MutationOptions = {},
   ): Promise<ProductDraftDocument> {
     const data = ProductDraftInputSchema.parse(input);
-    const [created] = await this.models.ProductDraft.create(
-      [{ ...data, validation: { valid: false, issues: [] } }],
-      options,
-    );
-    return created!;
+    try {
+      const [created] = await this.models.ProductDraft.create(
+        [{ ...data, validation: { valid: false, issues: [] } }],
+        options,
+      );
+      return created!;
+    } catch (error) {
+      translateWriteError(error, 'ProductDraft', data.key);
+    }
   }
 
   findByKey(key: string): Promise<ProductDraftDocument | null> {
     return this.models.ProductDraft.findOne({ key }).exec();
   }
 
-  findById(id: string | Types.ObjectId): Promise<ProductDraftDocument | null> {
-    return this.models.ProductDraft.findById(id).exec();
+  async list(
+    options: ProductListOptions = {},
+  ): Promise<Page<ProductDraftDocument>> {
+    const { limit, after } = pagination(options);
+    const filter: FilterQuery<ProductDraftRecord> = {
+      ...(after ? { _id: { $gt: after } } : {}),
+      ...(options.status ? { status: options.status } : {}),
+      ...(options.categoryId
+        ? { 'details.categoryId': options.categoryId }
+        : {}),
+    };
+    const items = await this.models.ProductDraft.find(filter)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .session(options.session ?? null)
+      .exec();
+    return page(items, limit);
+  }
+
+  async archive(
+    id: string | Types.ObjectId,
+    options: MutationOptions = {},
+  ): Promise<ProductDraftDocument> {
+    const document = await this.models.ProductDraft.findByIdAndUpdate(
+      id,
+      { $set: { status: 'archived' } },
+      { new: true, runValidators: true, session: options.session },
+    ).exec();
+    if (!document)
+      throw new DigikalaDocumentNotFoundError('ProductDraft', String(id));
+    return document;
+  }
+
+  findById(
+    id: string | Types.ObjectId,
+    options: QueryOptions = {},
+  ): Promise<ProductDraftDocument | null> {
+    return this.models.ProductDraft.findById(id)
+      .session(options.session ?? null)
+      .exec();
   }
 
   async requireById(
     id: string | Types.ObjectId,
+    options: QueryOptions = {},
   ): Promise<ProductDraftDocument> {
-    const product = await this.findById(id);
+    const product = await this.findById(id, options);
     if (!product)
       throw new DigikalaDocumentNotFoundError('ProductDraft', String(id));
     return product;
@@ -104,20 +280,25 @@ export class ProductDraftRepository {
     input: ProductDraftInput,
     options: MutationOptions = {},
   ): Promise<ProductDraftDocument> {
-    const product = await this.requireById(id);
+    const product = await this.requireById(id, options);
     product.set(ProductDraftInputSchema.parse(input));
     product.validation = { valid: false, issues: [] };
-    return product.save(options);
+    try {
+      return await product.save(options);
+    } catch (error) {
+      translateWriteError(error, 'ProductDraft', String(id));
+    }
   }
 
   async validateForPublication(
     id: string | Types.ObjectId,
     options: MutationOptions & { persist?: boolean } = {},
   ): Promise<CategoryValidationResult> {
-    const product = await this.requireById(id);
+    const product = await this.requireById(id, options);
     const plain = productDraftInputFromDocument(product);
     const category = await this.categories.findByCategoryId(
       product.details.categoryId,
+      options,
     );
     const result = validateProductDraft(plain, category?.toObject());
     if (options.persist !== false) {
@@ -127,7 +308,11 @@ export class ProductDraftRepository {
         ...(result.ruleVersion ? { ruleVersion: result.ruleVersion } : {}),
         validatedAt: new Date(),
       };
-      await product.save({ session: options.session });
+      try {
+        await product.save({ session: options.session });
+      } catch (error) {
+        translateWriteError(error, 'ProductDraft', String(id));
+      }
     }
     return result;
   }
@@ -152,12 +337,47 @@ export class VariantDraftRepository {
     options: MutationOptions = {},
   ): Promise<VariantDraftDocument> {
     const data = VariantDraftInputSchema.parse(input);
-    const [created] = await this.models.VariantDraft.create([data], options);
-    return created!;
+    try {
+      const [created] = await this.models.VariantDraft.create([data], options);
+      return created!;
+    } catch (error) {
+      translateWriteError(error, 'VariantDraft', data.key);
+    }
   }
 
   findByKey(key: string): Promise<VariantDraftDocument | null> {
     return this.models.VariantDraft.findOne({ key }).exec();
+  }
+
+  async list(
+    options: VariantListOptions = {},
+  ): Promise<Page<VariantDraftDocument>> {
+    const { limit, after } = pagination(options);
+    const filter: FilterQuery<VariantDraftRecord> = {
+      ...(after ? { _id: { $gt: after } } : {}),
+      ...(options.productId ? { productId: options.productId } : {}),
+      ...(options.status ? { status: options.status } : {}),
+    };
+    const items = await this.models.VariantDraft.find(filter)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .session(options.session ?? null)
+      .exec();
+    return page(items, limit);
+  }
+
+  async archive(
+    id: string | Types.ObjectId,
+    options: MutationOptions = {},
+  ): Promise<VariantDraftDocument> {
+    const document = await this.models.VariantDraft.findByIdAndUpdate(
+      id,
+      { $set: { status: 'archived' } },
+      { new: true, runValidators: true, session: options.session },
+    ).exec();
+    if (!document)
+      throw new DigikalaDocumentNotFoundError('VariantDraft', String(id));
+    return document;
   }
 
   findById(id: string | Types.ObjectId): Promise<VariantDraftDocument | null> {
@@ -188,8 +408,13 @@ export class VariantDraftRepository {
 export class CategoryRuleRepository {
   constructor(private readonly models: DigikalaMongooseModels) {}
 
-  findByCategoryId(categoryId: number): Promise<CategoryRuleDocument | null> {
-    return this.models.CategoryRule.findOne({ categoryId }).exec();
+  findByCategoryId(
+    categoryId: number,
+    options: QueryOptions = {},
+  ): Promise<CategoryRuleDocument | null> {
+    return this.models.CategoryRule.findOne({ categoryId })
+      .session(options.session ?? null)
+      .exec();
   }
 
   async upsert(
@@ -197,17 +422,22 @@ export class CategoryRuleRepository {
     options: MutationOptions = {},
   ): Promise<CategoryRuleDocument> {
     const data = CategoryRuleInputSchema.parse(input);
-    const result = await this.models.CategoryRule.findOneAndUpdate(
-      { categoryId: data.categoryId },
-      { $set: data },
-      {
-        new: true,
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-        session: options.session,
-      },
-    ).exec();
+    const result = await translatedWrite(
+      () =>
+        this.models.CategoryRule.findOneAndUpdate(
+          { categoryId: data.categoryId },
+          { $set: data },
+          {
+            new: true,
+            upsert: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+            session: options.session,
+          },
+        ).exec(),
+      'CategoryRule',
+      String(data.categoryId),
+    );
     if (!result) {
       throw new DigikalaDocumentNotFoundError(
         'CategoryRule',
@@ -239,9 +469,49 @@ export class PublicationRepository {
 
   findForVariant(
     panelKey: string,
+    productId: string | Types.ObjectId,
     variantId: string | Types.ObjectId,
   ): Promise<PublicationDocument | null> {
-    return this.models.Publication.findOne({ panelKey, variantId }).exec();
+    return this.models.Publication.findOne({
+      panelKey,
+      productId,
+      variantId,
+    }).exec();
+  }
+
+  async list(
+    options: PublicationListOptions = {},
+  ): Promise<Page<PublicationDocument>> {
+    const { limit, after } = pagination(options);
+    const filter: FilterQuery<PublicationRecord> = {
+      ...(after ? { _id: { $gt: after } } : {}),
+      ...(options.panelKey ? { panelKey: options.panelKey } : {}),
+      ...(options.productId ? { productId: options.productId } : {}),
+      ...(options.status ? { status: options.status } : {}),
+    };
+    const items = await this.models.Publication.find(filter)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .session(options.session ?? null)
+      .exec();
+    return page(items, limit);
+  }
+
+  async archive(
+    id: string | Types.ObjectId,
+    options: MutationOptions = {},
+  ): Promise<PublicationDocument> {
+    const document = await this.models.Publication.findByIdAndUpdate(
+      id,
+      {
+        $set: { status: 'archived' },
+        $push: { statusHistory: { status: 'archived', at: new Date() } },
+      },
+      { new: true, runValidators: true, session: options.session },
+    ).exec();
+    if (!document)
+      throw new DigikalaDocumentNotFoundError('Publication', String(id));
+    return document;
   }
 
   async upsert(
@@ -250,28 +520,39 @@ export class PublicationRepository {
   ): Promise<PublicationDocument> {
     const data = PublicationInputSchema.parse(input);
     const identity = data.variantId
-      ? { panelKey: data.panelKey, variantId: data.variantId }
+      ? {
+          panelKey: data.panelKey,
+          productId: data.productId,
+          variantId: data.variantId,
+        }
       : {
           panelKey: data.panelKey,
           productId: data.productId,
           variantId: { $exists: false },
         };
-    const result = await this.models.Publication.findOneAndUpdate(
-      identity,
-      { $set: data },
-      {
-        new: true,
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-        session: options.session,
-      },
-    ).exec();
+    const { status, ...withoutStatus } = data;
+    const update =
+      input.status === undefined
+        ? { $set: withoutStatus, $setOnInsert: { status } }
+        : {
+            $set: data,
+            $push: { statusHistory: { status, at: new Date() } },
+          };
+    const identifier = `${data.panelKey}:${data.variantId ?? data.productId}`;
+    const result = await translatedWrite(
+      () =>
+        this.models.Publication.findOneAndUpdate(identity, update, {
+          new: true,
+          upsert: true,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+          session: options.session,
+        }).exec(),
+      'Publication',
+      identifier,
+    );
     if (!result) {
-      throw new DigikalaDocumentNotFoundError(
-        'Publication',
-        `${data.panelKey}:${data.variantId ?? data.productId}`,
-      );
+      throw new DigikalaDocumentNotFoundError('Publication', identifier);
     }
     return result as PublicationDocument;
   }
@@ -294,22 +575,25 @@ export class CreationWorkflowRepository {
     options: MutationOptions = {},
   ): Promise<CreationWorkflowDocument> {
     const parsed = CreationWorkflowStateSchema.parse(state);
-    const result = await this.models.CreationWorkflow.findOneAndUpdate(
-      { panelKey, productId },
-      { $set: { state: parsed } },
-      {
-        new: true,
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-        session: options.session,
-      },
-    ).exec();
+    const identifier = `${panelKey}:${String(productId)}`;
+    const result = await translatedWrite(
+      () =>
+        this.models.CreationWorkflow.findOneAndUpdate(
+          { panelKey, productId },
+          { $set: { state: parsed } },
+          {
+            new: true,
+            upsert: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+            session: options.session,
+          },
+        ).exec(),
+      'CreationWorkflow',
+      identifier,
+    );
     if (!result) {
-      throw new DigikalaDocumentNotFoundError(
-        'CreationWorkflow',
-        `${panelKey}:${String(productId)}`,
-      );
+      throw new DigikalaDocumentNotFoundError('CreationWorkflow', identifier);
     }
     return result as CreationWorkflowDocument;
   }

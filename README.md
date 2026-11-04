@@ -83,7 +83,8 @@ const digikalaDb = createDigikalaMongoose({
   connection: mongoose.connection,
 });
 
-await digikalaDb.ensureIndexes();
+const readiness = await digikalaDb.ensureReady();
+console.log(readiness.schemaVersion);
 ```
 
 Create a locally validated product:
@@ -372,6 +373,10 @@ interface DigikalaEmbeddingProvider {
 This allows Transformers.js, an external embedding API, or any future model
 without coupling the persistence package to it.
 
+Set `embeddingModel` to record the model identity in every point payload, and
+use `batchSize` to bound Qdrant requests. `ensureCollection()` verifies the
+existing collection's vector size and distance before indexing.
+
 ## Models and collections
 
 | Model              | Default collection            | Purpose                               |
@@ -431,8 +436,50 @@ throws `DigikalaIdentityConflictError`; unexpected failures throw
 `DigikalaStandaloneOperationError` with completed-step information in
 `error.progress`.
 
-Call `ensureIndexes()` before accepting orchestration work because unique
-indexes provide race-safe idempotency.
+Call `ensureReady()` before accepting orchestration work. It runs idempotent
+schema migrations and creates the unique indexes that provide race-safe
+idempotency.
+
+Inspect state without writing when recovering an uncertain job:
+
+```ts
+const inspection = await digikalaDb.standalone.inspectCatalog(input);
+if (inspection.repairable) {
+  await digikalaDb.standalone.ensureCatalog(input);
+}
+```
+
+For imports, `ensureCatalogs(inputs, { concurrency: 8 })` performs bounded
+parallel work and returns one success or failure result per input. Repository
+`list()` methods provide `_id` cursor pagination; product, variant, and
+publication repositories also expose explicit `archive()` operations.
+Publication status changes are retained in `statusHistory` for auditing.
+
+Attach framework-neutral telemetry without exposing payloads:
+
+```ts
+createDigikalaMongoose({
+  connection,
+  observer: {
+    onEvent(event) {
+      logger.info(event, 'digikala-mongoose operation');
+    },
+  },
+});
+```
+
+Observer failures never change persistence outcomes.
+
+## Stable errors
+
+| Error                                | Meaning                                      |
+| ------------------------------------ | -------------------------------------------- |
+| `DigikalaDuplicateIdentityError`     | A repository unique identity already exists  |
+| `DigikalaConcurrencyError`           | Optimistic concurrency rejected a stale save |
+| `DigikalaIdentityConflictError`      | An idempotency key points to different data  |
+| `DigikalaStandaloneOperationError`   | A resumable multi-step operation was stopped |
+| `DigikalaCategoryNormalizationError` | A live category response was malformed       |
+| `DigikalaQdrantCompatibilityError`   | Vector collection configuration is unsafe    |
 
 ## Optional transactions
 
@@ -448,8 +495,8 @@ await connection.transaction(async (session) => {
 
 ## Production guidance
 
-- Run `ensureIndexes()` during controlled startup or deployment, not on every
-  request.
+- Run `ensureReady()` during controlled startup or deployment, not on every
+  request. NestJS can do this with `autoEnsureReady: true`.
 - Set `autoCreateIndexes: false` when production indexes are managed separately.
 - Refresh category rules and reference values regularly.
 - Perform a live Digikala preflight immediately before publication.

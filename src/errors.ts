@@ -5,10 +5,39 @@ export class DigikalaMongooseError extends Error {
   }
 }
 
+export class DigikalaConfigurationError extends DigikalaMongooseError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(`Invalid digikala-mongoose configuration: ${message}`, options);
+    this.name = 'DigikalaConfigurationError';
+  }
+}
+
 export class DigikalaDocumentNotFoundError extends DigikalaMongooseError {
   constructor(entity: string, identifier: string) {
     super(`${entity} was not found: ${identifier}`);
     this.name = 'DigikalaDocumentNotFoundError';
+  }
+}
+
+export class DigikalaDuplicateIdentityError extends DigikalaMongooseError {
+  constructor(
+    public readonly entity: string,
+    public readonly identifier: string,
+    options?: ErrorOptions,
+  ) {
+    super(`${entity} already exists: ${identifier}`, options);
+    this.name = 'DigikalaDuplicateIdentityError';
+  }
+}
+
+export class DigikalaConcurrencyError extends DigikalaMongooseError {
+  constructor(
+    public readonly entity: string,
+    public readonly identifier: string,
+    options?: ErrorOptions,
+  ) {
+    super(`${entity} changed during the operation: ${identifier}`, options);
+    this.name = 'DigikalaConcurrencyError';
   }
 }
 
@@ -47,6 +76,13 @@ export class DigikalaCategoryValidationError extends DigikalaMongooseError {
   ) {
     super(`Digikala category validation failed with ${issues.length} issue(s)`);
     this.name = 'DigikalaCategoryValidationError';
+  }
+}
+
+export class DigikalaCategoryNormalizationError extends DigikalaMongooseError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(`Digikala category response is invalid: ${message}`, options);
+    this.name = 'DigikalaCategoryNormalizationError';
   }
 }
 

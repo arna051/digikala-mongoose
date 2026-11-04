@@ -17,6 +17,7 @@ import type {
 import type { DigikalaCategoryValidationIssue } from './errors.js';
 
 export interface ProductDraftRecord extends ProductDraftData {
+  schemaVersion: number;
   validation: {
     valid: boolean;
     issues: DigikalaCategoryValidationIssue[];
@@ -31,12 +32,14 @@ export interface VariantDraftRecord extends Omit<
   VariantDraftData,
   'productId'
 > {
+  schemaVersion: number;
   productId: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CategoryRuleRecord {
+  schemaVersion: number;
   categoryId: number;
   version: string;
   title?: string;
@@ -53,6 +56,11 @@ export interface PublicationRecord extends Omit<
   PublicationData,
   'productId' | 'variantId'
 > {
+  schemaVersion: number;
+  statusHistory: Array<{
+    status: PublicationData['status'];
+    at: Date;
+  }>;
   productId: Types.ObjectId;
   variantId?: Types.ObjectId;
   createdAt: Date;
@@ -60,6 +68,7 @@ export interface PublicationRecord extends Omit<
 }
 
 export interface CreationWorkflowRecord {
+  schemaVersion: number;
   panelKey: string;
   productId: Types.ObjectId;
   state: CreationWorkflowState;
@@ -86,6 +95,19 @@ export interface DigikalaMongooseOptions {
   modelPrefix?: string;
   collectionPrefix?: string;
   autoCreateIndexes?: boolean;
+  observer?: DigikalaMongooseObserver;
+}
+
+export interface DigikalaMongooseEvent {
+  operation: 'standalone.ensureCatalog';
+  phase: 'started' | 'succeeded' | 'failed';
+  productKey: string;
+  durationMs?: number;
+  error?: unknown;
+}
+
+export interface DigikalaMongooseObserver {
+  onEvent(event: DigikalaMongooseEvent): void | Promise<void>;
 }
 
 export interface ProductPublicationPayloads {

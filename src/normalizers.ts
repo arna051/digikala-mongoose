@@ -4,6 +4,7 @@ import {
   type CategoryFieldRule,
   type CategoryRuleData,
 } from './contracts.js';
+import { DigikalaCategoryNormalizationError } from './errors.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -112,10 +113,29 @@ export function normalizeDigikalaCategoryAttributes(input: {
   fetchedAt?: Date;
   expiresAt?: Date;
 }): CategoryRuleData {
-  const root = record(input.response) ?? {};
-  const data = record(root.data) ?? root;
+  if (!Number.isInteger(input.categoryId) || input.categoryId <= 0) {
+    throw new DigikalaCategoryNormalizationError(
+      'categoryId must be a positive integer',
+    );
+  }
+  const root = record(input.response);
+  if (!root) {
+    throw new DigikalaCategoryNormalizationError('expected an object response');
+  }
+  const status = text(root.status)?.toLowerCase();
+  if (status && !['ok', 'success', 'successful'].includes(status)) {
+    throw new DigikalaCategoryNormalizationError(
+      `API returned status ${String(root.status)}`,
+    );
+  }
+  const data = 'data' in root ? record(root.data) : root;
+  if (!data) {
+    throw new DigikalaCategoryNormalizationError(
+      'response.data must be an object',
+    );
+  }
   const groups = record(data.category_group_attributes) ?? {};
-  const attributeRules: CategoryAttributeRule[] = [];
+  const attributeRules = new Map<number, CategoryAttributeRule>();
 
   for (const [groupKey, rawGroup] of Object.entries(groups)) {
     const group = record(rawGroup) ?? {};
@@ -128,7 +148,8 @@ export function normalizeDigikalaCategoryAttributes(input: {
       const label = text(attribute.title) ?? text(attribute.label);
       if (!id || !label) continue;
       const values = normalizeValues(attribute.values);
-      attributeRules.push({
+      if (attributeRules.has(id)) continue;
+      attributeRules.set(id, {
         id,
         label,
         type: normalizeType(attribute.type),
@@ -149,16 +170,15 @@ export function normalizeDigikalaCategoryAttributes(input: {
     }
   }
 
+  const fetchedAt = input.fetchedAt ?? new Date();
   return CategoryRuleInputSchema.parse({
     categoryId: input.categoryId,
-    version:
-      input.version ??
-      `${input.categoryId}:${(input.fetchedAt ?? new Date()).toISOString()}`,
+    version: input.version ?? `${input.categoryId}:${fetchedAt.toISOString()}`,
     ...(input.title ? { title: input.title } : {}),
     fields: dimensionRules(data),
-    attributeRules,
+    attributeRules: [...attributeRules.values()],
     sourcePayload: input.response,
-    fetchedAt: input.fetchedAt ?? new Date(),
+    fetchedAt,
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
   });
 }

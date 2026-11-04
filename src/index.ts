@@ -2,7 +2,12 @@ export { createDigikalaMongoose } from './client.js';
 export type { DigikalaMongoose } from './client.js';
 export * from './contracts.js';
 export * from './errors.js';
-export { createDigikalaModels, ensureDigikalaIndexes } from './models.js';
+export {
+  CURRENT_DIGIKALA_SCHEMA_VERSION,
+  createDigikalaModels,
+  ensureDigikalaIndexes,
+  migrateDigikalaData,
+} from './models.js';
 export { normalizeDigikalaCategoryAttributes } from './normalizers.js';
 export {
   buildProductPublicationPayloads,

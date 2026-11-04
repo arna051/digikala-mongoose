@@ -12,11 +12,13 @@ import {
   type VariantDraftInput,
 } from './contracts.js';
 import {
+  DigikalaDuplicateIdentityError,
   DigikalaIdentityConflictError,
   DigikalaStandaloneOperationError,
   type DigikalaStandaloneProgress,
 } from './errors.js';
 import {
+  publicationInputFromDocument,
   productDraftInputFromDocument,
   variantDraftInputFromDocument,
   type DigikalaMongooseRepositories,
@@ -26,6 +28,7 @@ import type {
   PublicationDocument,
   VariantDraftDocument,
 } from './types.js';
+import type { DigikalaMongooseObserver } from './types.js';
 
 const standaloneVariantSchema = VariantDraftInputSchema.omit({
   productId: true,
@@ -69,6 +72,44 @@ export interface DigikalaStandaloneOrchestrator {
   ensureCatalog(
     input: StandaloneCatalogInput,
   ): Promise<StandaloneCatalogResult>;
+  ensureCatalogs(
+    inputs: readonly StandaloneCatalogInput[],
+    options?: StandaloneBulkOptions,
+  ): Promise<StandaloneBulkResult>;
+  inspectCatalog(input: StandaloneCatalogInput): Promise<CatalogInspection>;
+}
+
+export type CatalogInspectionStatus = 'missing' | 'matching' | 'conflict';
+
+export interface CatalogInspectionItem {
+  entity: 'product' | 'variant' | 'publication';
+  key: string;
+  status: CatalogInspectionStatus;
+  documentId?: string;
+}
+
+export interface CatalogInspection {
+  consistent: boolean;
+  repairable: boolean;
+  items: CatalogInspectionItem[];
+}
+
+export interface StandaloneBulkOptions {
+  concurrency?: number;
+}
+
+export type StandaloneBulkItemResult =
+  | { index: number; ok: true; value: StandaloneCatalogResult }
+  | { index: number; ok: false; error: unknown };
+
+export interface StandaloneBulkResult {
+  items: StandaloneBulkItemResult[];
+  succeeded: number;
+  failed: number;
+}
+
+export interface DigikalaStandaloneOrchestratorOptions {
+  observer?: DigikalaMongooseObserver;
 }
 
 interface ParsedStandaloneInput {
@@ -99,6 +140,7 @@ function parseInput(input: StandaloneCatalogInput): ParsedStandaloneInput {
     }
     variantKeys.add(variant.key);
   }
+  const publicationKeys = new Set<string>();
   for (const publication of publications) {
     if (publication.variantKey && !variantKeys.has(publication.variantKey)) {
       throw new DigikalaIdentityConflictError(
@@ -107,11 +149,21 @@ function parseInput(input: StandaloneCatalogInput): ParsedStandaloneInput {
         `Publication references a variant not present in the request: ${publication.variantKey}`,
       );
     }
+    const key = publicationKey(publication);
+    if (publicationKeys.has(key)) {
+      throw new DigikalaIdentityConflictError(
+        'publication',
+        key,
+        `Publication identity is duplicated in the standalone request: ${key}`,
+      );
+    }
+    publicationKeys.add(key);
   }
   return { product, variants, publications };
 }
 
 function isDuplicateKey(error: unknown): boolean {
+  if (error instanceof DigikalaDuplicateIdentityError) return true;
   if (!error || typeof error !== 'object') return false;
   const candidate = error as {
     code?: number;
@@ -128,7 +180,7 @@ function isDuplicateKey(error: unknown): boolean {
 function publicationKey(
   publication: ParsedStandaloneInput['publications'][number],
 ): string {
-  return `${publication.panelKey}:${publication.variantKey ?? 'product'}`;
+  return JSON.stringify([publication.panelKey, publication.variantKey ?? null]);
 }
 
 function progressFor(
@@ -167,16 +219,55 @@ function sameVariant(
   return isDeepStrictEqual(withoutProductId, expected);
 }
 
+function samePublication(
+  document: PublicationDocument,
+  expected: PublicationData,
+): boolean {
+  return isDeepStrictEqual(
+    PublicationInputSchema.parse(publicationInputFromDocument(document)),
+    expected,
+  );
+}
+
 export function createDigikalaStandaloneOrchestrator(
   repositories: DigikalaMongooseRepositories,
+  options: DigikalaStandaloneOrchestratorOptions = {},
 ): DigikalaStandaloneOrchestrator {
-  return {
+  const emit = async (
+    event: Parameters<DigikalaMongooseObserver['onEvent']>[0],
+  ): Promise<void> => {
+    try {
+      await options.observer?.onEvent(event);
+    } catch {
+      // Telemetry must never change persistence outcomes.
+    }
+  };
+  const orchestrator: DigikalaStandaloneOrchestrator = {
     async ensureCatalog(input) {
-      const parsed = parseInput(input);
+      const started = Date.now();
+      await emit({
+        operation: 'standalone.ensureCatalog',
+        phase: 'started',
+        productKey: input.product.key,
+      });
+      let parsed: ParsedStandaloneInput;
+      try {
+        parsed = parseInput(input);
+      } catch (error) {
+        await emit({
+          operation: 'standalone.ensureCatalog',
+          phase: 'failed',
+          productKey: input.product.key,
+          durationMs: Date.now() - started,
+          error,
+        });
+        throw error;
+      }
       const variants: StandaloneCatalogResult['variants'] = [];
       const publications: StandaloneCatalogResult['publications'] = [];
       let product: ProductDraftDocument | undefined;
       let productCreated = false;
+      let step = 'product';
 
       try {
         product =
@@ -202,6 +293,7 @@ export function createDigikalaStandaloneOrchestrator(
         }
 
         for (const variantInput of parsed.variants) {
+          step = `variant:${variantInput.key}`;
           let document = await repositories.variants.findByKey(
             variantInput.key,
           );
@@ -238,12 +330,14 @@ export function createDigikalaStandaloneOrchestrator(
         );
         for (const publicationInput of parsed.publications) {
           const key = publicationKey(publicationInput);
+          step = `publication:${key}`;
           const variant = publicationInput.variantKey
             ? variantsByKey.get(publicationInput.variantKey)
             : undefined;
           const existing = variant
             ? await repositories.publications.findForVariant(
                 publicationInput.panelKey,
+                product.id,
                 variant.id,
               )
             : await repositories.publications.findForProduct(
@@ -253,7 +347,20 @@ export function createDigikalaStandaloneOrchestrator(
           let created = !existing;
           const { variantKey: _variantKey, ...publication } = publicationInput;
           void _variantKey;
+          const expected = PublicationInputSchema.parse({
+            ...publication,
+            productId: product.id,
+            ...(variant ? { variantId: variant.id } : {}),
+          });
+          if (existing && !samePublication(existing, expected)) {
+            throw new DigikalaIdentityConflictError('publication', key);
+          }
           let document: PublicationDocument;
+          if (existing) {
+            document = existing;
+            publications.push({ key, document, created: false });
+            continue;
+          }
           try {
             document = await repositories.publications.upsert({
               ...publication,
@@ -265,6 +372,7 @@ export function createDigikalaStandaloneOrchestrator(
             const raced = variant
               ? await repositories.publications.findForVariant(
                   publicationInput.panelKey,
+                  product.id,
                   variant.id,
                 )
               : await repositories.publications.findForProduct(
@@ -274,17 +382,16 @@ export function createDigikalaStandaloneOrchestrator(
             if (!raced) {
               throw new DigikalaIdentityConflictError('publication', key);
             }
+            if (!samePublication(raced, expected)) {
+              throw new DigikalaIdentityConflictError('publication', key);
+            }
             created = false;
-            document = await repositories.publications.upsert({
-              ...publication,
-              productId: product.id,
-              ...(variant ? { variantId: variant.id } : {}),
-            });
+            document = raced;
           }
           publications.push({ key, document, created });
         }
 
-        return {
+        const result = {
           product: { document: product, created: productCreated },
           variants,
           publications,
@@ -293,18 +400,152 @@ export function createDigikalaStandaloneOrchestrator(
             variants.some((item) => !item.created) ||
             publications.some((item) => !item.created),
         };
+        await emit({
+          operation: 'standalone.ensureCatalog',
+          phase: 'succeeded',
+          productKey: parsed.product.key,
+          durationMs: Date.now() - started,
+        });
+        return result;
       } catch (error) {
-        if (error instanceof DigikalaIdentityConflictError) throw error;
-        throw new DigikalaStandaloneOperationError(
-          product
-            ? variants.length < parsed.variants.length
-              ? 'variants'
-              : 'publications'
-            : 'product',
-          progressFor(parsed.product.key, product?.id, variants, publications),
-          { cause: error },
-        );
+        const surfaced =
+          error instanceof DigikalaIdentityConflictError
+            ? error
+            : new DigikalaStandaloneOperationError(
+                step,
+                progressFor(
+                  parsed.product.key,
+                  product?.id,
+                  variants,
+                  publications,
+                ),
+                { cause: error },
+              );
+        await emit({
+          operation: 'standalone.ensureCatalog',
+          phase: 'failed',
+          productKey: parsed.product.key,
+          durationMs: Date.now() - started,
+          error: surfaced,
+        });
+        throw surfaced;
       }
     },
+    async ensureCatalogs(inputs, options = {}) {
+      const concurrency = options.concurrency ?? 4;
+      if (
+        !Number.isInteger(concurrency) ||
+        concurrency < 1 ||
+        concurrency > 32
+      ) {
+        throw new RangeError(
+          'Standalone bulk concurrency must be an integer between 1 and 32',
+        );
+      }
+      const items = new Array<StandaloneBulkItemResult>(inputs.length);
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        while (cursor < inputs.length) {
+          const index = cursor++;
+          try {
+            items[index] = {
+              index,
+              ok: true,
+              value: await orchestrator.ensureCatalog(inputs[index]!),
+            };
+          } catch (error) {
+            items[index] = { index, ok: false, error };
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, inputs.length) }, worker),
+      );
+      const succeeded = items.filter((item) => item.ok).length;
+      return {
+        items,
+        succeeded,
+        failed: items.length - succeeded,
+      };
+    },
+    async inspectCatalog(input) {
+      const parsed = parseInput(input);
+      const items: CatalogInspectionItem[] = [];
+      const product = await repositories.products.findByKey(parsed.product.key);
+      items.push({
+        entity: 'product',
+        key: parsed.product.key,
+        status: !product
+          ? 'missing'
+          : sameProduct(product, parsed.product)
+            ? 'matching'
+            : 'conflict',
+        ...(product ? { documentId: product.id } : {}),
+      });
+
+      const variantsByKey = new Map<string, VariantDraftDocument>();
+      for (const variantInput of parsed.variants) {
+        const variant = await repositories.variants.findByKey(variantInput.key);
+        if (variant) variantsByKey.set(variantInput.key, variant);
+        const matches = Boolean(
+          variant &&
+          product &&
+          String(variant.productId) === product.id &&
+          sameVariant(variant, variantInput),
+        );
+        items.push({
+          entity: 'variant',
+          key: variantInput.key,
+          status: !variant ? 'missing' : matches ? 'matching' : 'conflict',
+          ...(variant ? { documentId: variant.id } : {}),
+        });
+      }
+
+      for (const publicationInput of parsed.publications) {
+        const key = publicationKey(publicationInput);
+        const variant = publicationInput.variantKey
+          ? variantsByKey.get(publicationInput.variantKey)
+          : undefined;
+        if (!product || (publicationInput.variantKey && !variant)) {
+          items.push({ entity: 'publication', key, status: 'missing' });
+          continue;
+        }
+        const publication = variant
+          ? await repositories.publications.findForVariant(
+              publicationInput.panelKey,
+              product.id,
+              variant.id,
+            )
+          : await repositories.publications.findForProduct(
+              publicationInput.panelKey,
+              product.id,
+            );
+        const { variantKey: _variantKey, ...publicationData } =
+          publicationInput;
+        void _variantKey;
+        const expected = PublicationInputSchema.parse({
+          ...publicationData,
+          productId: product.id,
+          ...(variant ? { variantId: variant.id } : {}),
+        });
+        items.push({
+          entity: 'publication',
+          key,
+          status: !publication
+            ? 'missing'
+            : samePublication(publication, expected)
+              ? 'matching'
+              : 'conflict',
+          ...(publication ? { documentId: publication.id } : {}),
+        });
+      }
+
+      return {
+        consistent: items.every((item) => item.status === 'matching'),
+        repairable: items.every((item) => item.status !== 'conflict'),
+        items,
+      };
+    },
   };
+  return orchestrator;
 }

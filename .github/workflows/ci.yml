@@ -1,5 +1,9 @@
 name: CI
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main]
@@ -10,9 +14,25 @@ permissions:
 
 jobs:
   verify:
+    timeout-minutes: 15
+    services:
+      mongodb:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      qdrant:
+        image: qdrant/qdrant:v1.19.2
+        ports:
+          - 6333:6333
     strategy:
+      fail-fast: false
       matrix:
-        node: [20, 22]
+        node: [20, 22, 24]
         mongoose: [8, 9]
     runs-on: ubuntu-latest
     steps:
@@ -22,5 +42,43 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm install --no-save mongoose@${{ matrix.mongoose }}
+      - run: npm install --no-save --no-package-lock mongoose@${{ matrix.mongoose }}
       - run: npm run verify
+      - run: npm run test:integration
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          QDRANT_URL: http://127.0.0.1:6333
+      - run: npm audit --omit=dev
+      - run: npm run check:secrets
+      - run: npm run check:package
+      - if: matrix.node == 22 && matrix.mongoose == 8
+        run: npm run test:coverage
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          QDRANT_URL: http://127.0.0.1:6333
+
+  replica-set:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Start MongoDB replica set
+        run: |
+          docker run -d --name digikala-mongo-rs -p 27018:27017 mongo:8 --replSet rs0 --bind_ip_all
+          for attempt in {1..30}; do
+            if docker exec digikala-mongo-rs mongosh --quiet --eval 'db.adminCommand({ ping: 1 })' >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker exec digikala-mongo-rs mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+          for attempt in {1..30}; do
+            if docker exec digikala-mongo-rs mongosh --quiet --eval 'quit(db.hello().isWritablePrimary ? 0 : 2)' >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+      - run: npm run test:integration
+        env:
+          MONGODB_REPLICA_URI: mongodb://127.0.0.1:27018/?replicaSet=rs0&directConnection=true

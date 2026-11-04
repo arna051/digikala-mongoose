@@ -1,6 +1,8 @@
 import { Mongoose } from 'mongoose';
 import { describe, expect, it } from 'vitest';
 import {
+  DigikalaCategoryNormalizationError,
+  DigikalaConfigurationError,
   ProductDraftInputSchema,
   VariantDraftInputSchema,
   buildProductPublicationPayloads,
@@ -102,6 +104,12 @@ describe('Digikala-compatible contracts', () => {
       required: true,
       values: [{ value: 7070, label: 'فارسی' }],
     });
+    expect(rules.fields).toContainEqual(
+      expect.objectContaining({
+        path: 'attributes.weight',
+        required: true,
+      }),
+    );
 
     const result = validateProductDraft(
       {
@@ -114,6 +122,132 @@ describe('Digikala-compatible contracts', () => {
       rules,
     );
     expect(result.valid).toBe(true);
+  });
+
+  it('rejects malformed category responses and deduplicates attributes', () => {
+    expect(() =>
+      normalizeDigikalaCategoryAttributes({
+        categoryId: 10707,
+        response: { status: 'error', data: null },
+      }),
+    ).toThrow(DigikalaCategoryNormalizationError);
+
+    const rules = normalizeDigikalaCategoryAttributes({
+      categoryId: 10707,
+      response: {
+        status: 'ok',
+        data: {
+          category_group_attributes: {
+            1: {
+              attributes: { 10: { id: 10, title: 'رنگ', type: 'select' } },
+            },
+            2: {
+              attributes: { 10: { id: 10, title: 'رنگ', type: 'select' } },
+            },
+          },
+        },
+      },
+    });
+
+    expect(rules.attributeRules).toHaveLength(1);
+    expect(rules.version).toBe(
+      `${rules.categoryId}:${rules.fetchedAt.toISOString()}`,
+    );
+  });
+
+  it('returns useful schema issue codes and rejects expired rules', () => {
+    const parsedProduct = ProductDraftInputSchema.parse(product);
+    const malformed = validateProductDraft({
+      ...parsedProduct,
+      key: '',
+    });
+    expect(malformed.issues[0]?.code).toBe('too_small');
+
+    const expired = validateProductDraft(parsedProduct, {
+      categoryId: 10707,
+      version: 'expired-v1',
+      fields: [],
+      expiresAt: new Date('2000-01-01T00:00:00.000Z'),
+    });
+    expect(expired).toMatchObject({
+      valid: false,
+      issues: [{ path: 'details.categoryId', code: 'invalid_value' }],
+    });
+  });
+
+  it('reports field and attribute rule violations precisely', () => {
+    const parsed = ProductDraftInputSchema.parse({
+      ...product,
+      metadata: { code: 'bad', choice: 'x', tags: ['x'] },
+      attributes: {
+        attributes: [[{ id: 100, value: 9 }]],
+      },
+    });
+    const result = validateProductDraft(parsed, {
+      categoryId: 10707,
+      version: 'strict-rules',
+      fields: [
+        {
+          path: 'details.packageWeight',
+          label: 'weight',
+          type: 'number',
+          required: true,
+          min: 500,
+          max: 600,
+          sortOrder: 0,
+        },
+        {
+          path: 'metadata.code',
+          label: 'code',
+          type: 'string',
+          required: true,
+          pattern: '^GOOD$',
+          sortOrder: 1,
+        },
+        {
+          path: 'metadata.choice',
+          label: 'choice',
+          type: 'select',
+          required: true,
+          values: [{ value: 'allowed', label: 'Allowed' }],
+          sortOrder: 2,
+        },
+        {
+          path: 'metadata.tags',
+          label: 'tags',
+          type: 'multiselect',
+          required: true,
+          values: [{ value: 'allowed', label: 'Allowed' }],
+          sortOrder: 3,
+        },
+        {
+          path: 'metadata.missing',
+          label: 'missing',
+          type: 'boolean',
+          required: true,
+          sortOrder: 4,
+        },
+      ],
+      attributeRules: [
+        {
+          id: 100,
+          label: 'attribute',
+          type: 'select',
+          required: true,
+          values: [{ value: 10, label: 'Ten' }],
+        },
+        {
+          id: 101,
+          label: 'required attribute',
+          type: 'string',
+          required: true,
+        },
+      ],
+    });
+
+    expect(new Set(result.issues.map((issue) => issue.code))).toEqual(
+      new Set(['too_small', 'invalid_format', 'invalid_value', 'required']),
+    );
   });
 
   it('builds a validated variant request only after a remote product exists', () => {
@@ -179,6 +313,27 @@ describe('Mongoose models', () => {
       }).validate(),
     ).rejects.toThrow('Digikala validation contract');
 
+    await connection.close();
+  });
+
+  it('rejects model-name reuse with a different collection prefix', async () => {
+    const mongoose = new Mongoose();
+    const connection = mongoose.createConnection();
+    createDigikalaModels({
+      connection,
+      modelPrefix: 'Collision',
+      collectionPrefix: 'first_',
+      autoCreateIndexes: false,
+    });
+
+    expect(() =>
+      createDigikalaModels({
+        connection,
+        modelPrefix: 'Collision',
+        collectionPrefix: 'second_',
+        autoCreateIndexes: false,
+      }),
+    ).toThrow(DigikalaConfigurationError);
     await connection.close();
   });
 });

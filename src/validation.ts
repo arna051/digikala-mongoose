@@ -14,6 +14,7 @@ export interface CategoryValidationRuleSet {
   version: string;
   fields: readonly CategoryFieldRule[];
   attributeRules?: readonly CategoryAttributeRule[];
+  expiresAt?: Date;
 }
 
 export interface CategoryValidationResult {
@@ -83,6 +84,21 @@ function attributeValues(value: unknown): Map<number, unknown> {
   return result;
 }
 
+function zodIssueCode(code: string): DigikalaCategoryValidationIssue['code'] {
+  switch (code) {
+    case 'invalid_type':
+      return 'invalid_type';
+    case 'too_small':
+      return 'too_small';
+    case 'too_big':
+      return 'too_big';
+    case 'invalid_value':
+      return 'invalid_value';
+    default:
+      return 'invalid_format';
+  }
+}
+
 export function validateProductDraft(
   input: ProductDraftInput,
   rules?: CategoryValidationRuleSet,
@@ -93,7 +109,7 @@ export function validateProductDraft(
     issues.push(
       ...base.error.issues.map((issue) => ({
         path: issue.path.join('.'),
-        code: 'invalid_format' as const,
+        code: zodIssueCode(issue.code),
         message: issue.message,
       })),
     );
@@ -105,6 +121,14 @@ export function validateProductDraft(
       path: 'details.categoryId',
       code: 'invalid_value',
       message: `Category rule ${rules.categoryId} cannot validate category ${base.data.details.categoryId}`,
+    });
+    return { valid: false, issues, ruleVersion: rules.version };
+  }
+  if (rules.expiresAt && rules.expiresAt <= new Date()) {
+    issues.push({
+      path: 'details.categoryId',
+      code: 'invalid_value',
+      message: `Category rule ${rules.version} has expired and must be refreshed`,
     });
     return { valid: false, issues, ruleVersion: rules.version };
   }

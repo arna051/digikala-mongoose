@@ -85,8 +85,10 @@ function fakeRepositories(): DigikalaMongooseRepositories {
       },
       async findForVariant(
         panelKey: string,
+        _productId: string | Types.ObjectId,
         variantId: string | Types.ObjectId,
       ) {
+        void _productId;
         return publications.get(`${panelKey}:${String(variantId)}`) ?? null;
       },
       async upsert(input: PublicationInput) {
@@ -157,5 +159,102 @@ describe('standalone-safe orchestration', () => {
       }),
     ).rejects.toBeInstanceOf(DigikalaIdentityConflictError);
     await expect(repositories.products.findByKey('mug')).resolves.toBeNull();
+  });
+
+  it('rejects duplicate publication identities before writing', async () => {
+    const repositories = fakeRepositories();
+    const standalone = createDigikalaStandaloneOrchestrator(repositories);
+
+    await expect(
+      standalone.ensureCatalog({
+        product: productInput,
+        publications: [
+          { panelKey: 'main', status: 'queued' },
+          { panelKey: 'main', status: 'published' },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(DigikalaIdentityConflictError);
+    await expect(repositories.products.findByKey('mug')).resolves.toBeNull();
+  });
+
+  it('never overwrites an existing publication during replay', async () => {
+    const standalone = createDigikalaStandaloneOrchestrator(fakeRepositories());
+    await standalone.ensureCatalog({
+      product: productInput,
+      publications: [{ panelKey: 'main', status: 'published' }],
+    });
+
+    await expect(
+      standalone.ensureCatalog({
+        product: productInput,
+        publications: [{ panelKey: 'main', status: 'queued' }],
+      }),
+    ).rejects.toBeInstanceOf(DigikalaIdentityConflictError);
+  });
+
+  it('validates bulk concurrency', async () => {
+    const standalone = createDigikalaStandaloneOrchestrator(fakeRepositories());
+    await expect(
+      standalone.ensureCatalogs([], { concurrency: 0 }),
+    ).rejects.toThrow('between 1 and 32');
+  });
+
+  it('emits non-blocking lifecycle events', async () => {
+    const phases: string[] = [];
+    const standalone = createDigikalaStandaloneOrchestrator(
+      fakeRepositories(),
+      {
+        observer: {
+          onEvent(event) {
+            phases.push(event.phase);
+            if (event.phase === 'started')
+              throw new Error('logger unavailable');
+          },
+        },
+      },
+    );
+
+    await expect(
+      standalone.ensureCatalog({ product: productInput }),
+    ).resolves.toBeDefined();
+    expect(phases).toEqual(['started', 'succeeded']);
+  });
+
+  it('inspects missing, matching, and conflicting catalog state', async () => {
+    const standalone = createDigikalaStandaloneOrchestrator(fakeRepositories());
+    const input = { product: productInput, variants: [variantInput] };
+
+    await expect(standalone.inspectCatalog(input)).resolves.toMatchObject({
+      consistent: false,
+      repairable: true,
+      items: [
+        { entity: 'product', status: 'missing' },
+        { entity: 'variant', status: 'missing' },
+      ],
+    });
+    await standalone.ensureCatalog(input);
+    await expect(standalone.inspectCatalog(input)).resolves.toMatchObject({
+      consistent: true,
+      repairable: true,
+    });
+    await expect(
+      standalone.inspectCatalog({
+        ...input,
+        product: {
+          ...productInput,
+          title: { titleFa: 'عنوان متضاد' },
+        },
+      }),
+    ).resolves.toMatchObject({
+      consistent: false,
+      repairable: false,
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          entity: 'product',
+          status: 'conflict',
+          key: 'mug',
+        }),
+      ]),
+    });
   });
 });
