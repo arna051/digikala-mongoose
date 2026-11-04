@@ -182,6 +182,7 @@ integration('standalone MongoDB integration', () => {
 
   it('migrates legacy documents idempotently', async () => {
     const legacyId = new mongoose.Types.ObjectId();
+    const legacyPublicationId = new mongoose.Types.ObjectId();
     await db.models.ProductDraft.collection.insertOne({
       _id: legacyId,
       key: 'legacy-product',
@@ -192,18 +193,34 @@ integration('standalone MongoDB integration', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+    await db.models.Publication.collection.insertOne({
+      _id: legacyPublicationId,
+      schemaVersion: 1,
+      panelKey: 'legacy-panel',
+      productId: legacyId,
+      status: 'not_published',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const first = await db.migrate();
     const second = await db.migrate();
     const migrated = await db.models.ProductDraft.collection.findOne({
       _id: legacyId,
     });
+    const migratedPublication = await db.models.Publication.collection.findOne({
+      _id: legacyPublicationId,
+    });
 
-    expect(first.migratedDocuments).toBe(1);
+    expect(first.migratedDocuments).toBe(2);
     expect(first.schemaVersion).toBe(1);
     expect(second.migratedDocuments).toBe(0);
     expect(migrated?.schemaVersion).toBe(1);
+    expect(migratedPublication?.statusHistory).toEqual([]);
     await db.models.ProductDraft.collection.deleteOne({ _id: legacyId });
+    await db.models.Publication.collection.deleteOne({
+      _id: legacyPublicationId,
+    });
   });
 
   it('supports bounded bulk writes, cursor pagination, and archiving', async () => {

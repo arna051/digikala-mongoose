@@ -342,8 +342,14 @@ export async function ensureDigikalaIndexes(
 export async function migrateDigikalaData(
   models: DigikalaMongooseModels,
 ): Promise<{ migratedDocuments: number; schemaVersion: number }> {
-  const results = await Promise.all(
-    Object.values(models).map((model) =>
+  const versionOnlyModels = [
+    models.ProductDraft,
+    models.VariantDraft,
+    models.CategoryRule,
+    models.CreationWorkflow,
+  ];
+  const results = await Promise.all([
+    ...versionOnlyModels.map((model) =>
       model
         .updateMany(
           { schemaVersion: { $exists: false } },
@@ -352,7 +358,24 @@ export async function migrateDigikalaData(
         )
         .exec(),
     ),
-  );
+    models.Publication.updateMany(
+      {
+        $or: [
+          { schemaVersion: { $exists: false } },
+          { statusHistory: { $exists: false } },
+        ],
+      },
+      [
+        {
+          $set: {
+            schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION,
+            statusHistory: { $ifNull: ['$statusHistory', []] },
+          },
+        },
+      ],
+      { runValidators: false },
+    ).exec(),
+  ]);
   return {
     migratedDocuments: results.reduce(
       (total, result) => total + result.modifiedCount,

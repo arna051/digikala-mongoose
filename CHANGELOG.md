@@ -6,6 +6,10 @@ major version.
 
 ## Unreleased
 
+## 1.0.1 - 2026-11-04
+
+- Backfilled `statusHistory` for legacy publication records during migration.
+
 ## 1.0.0 - 2026-11-04
 
 - Added real standalone MongoDB and Qdrant integration suites.
