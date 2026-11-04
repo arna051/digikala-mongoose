@@ -1,0 +1,108 @@
+{
+  "name": "digikala-mongoose",
+  "version": "0.1.0",
+  "description": "Mongoose persistence and validation for Digikala-ready product catalogs.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./nestjs": {
+      "types": "./dist/nestjs/index.d.ts",
+      "import": "./dist/nestjs/index.js",
+      "require": "./dist/nestjs/index.cjs"
+    },
+    "./qdrant": {
+      "types": "./dist/qdrant/index.d.ts",
+      "import": "./dist/qdrant/index.js",
+      "require": "./dist/qdrant/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "nestjs": [
+        "dist/nestjs/index.d.ts"
+      ],
+      "qdrant": [
+        "dist/qdrant/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "check": "npm run typecheck && npm run lint && npm run format:check",
+    "check:exports": "node scripts/check-exports.mjs",
+    "clean": "rimraf dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint src test tsup.config.ts",
+    "prepublishOnly": "npm run verify",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run check && npm test && npm run build && npm run check:exports"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "digikala",
+    "mongoose",
+    "mongodb",
+    "nestjs",
+    "qdrant",
+    "ecommerce",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "Hippogriff Studio <arnadev051@gmail.com> (https://hippogriff.ir)",
+  "homepage": "https://github.com/arna051/digikala-mongoose#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arna051/digikala-mongoose.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arna051/digikala-mongoose/issues"
+  },
+  "dependencies": {
+    "digikala": "^0.2.0",
+    "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nestjs/common": ">=10 <12",
+    "mongoose": ">=8 <10"
+  },
+  "peerDependenciesMeta": {
+    "@nestjs/common": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@nestjs/common": "^11.1.11",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "mongoose": "^8.24.8",
+    "prettier": "^3.9.0",
+    "reflect-metadata": "^0.2.2",
+    "rimraf": "^6.1.3",
+    "rxjs": "^7.8.2",
+    "tsup": "^9.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^4.1.12"
+  }
+}
