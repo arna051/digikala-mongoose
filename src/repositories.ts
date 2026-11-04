@@ -2,7 +2,7 @@ import {
   CreationWorkflowStateSchema,
   type CreationWorkflowState,
 } from 'digikala/schemas';
-import { Types, type ClientSession, type FilterQuery } from 'mongoose';
+import { Types, type ClientSession } from 'mongoose';
 import {
   CategoryRuleInputSchema,
   ProductDraftInputSchema,
@@ -29,18 +29,17 @@ import type {
   CreationWorkflowDocument,
   DigikalaMongooseModels,
   ProductDraftDocument,
-  ProductDraftRecord,
   ProductPublicationPayloads,
   PublicationDocument,
-  PublicationRecord,
   VariantDraftDocument,
-  VariantDraftRecord,
   VariantPublicationPayload,
 } from './types.js';
 import {
   validateProductDraft,
   type CategoryValidationResult,
 } from './validation.js';
+
+type RepositoryFilter = Record<string, unknown>;
 
 export interface MutationOptions {
   session?: ClientSession;
@@ -241,7 +240,7 @@ export class ProductDraftRepository {
     options: ProductListOptions = {},
   ): Promise<Page<ProductDraftDocument>> {
     const { limit, after } = pagination(options);
-    const filter: FilterQuery<ProductDraftRecord> = {
+    const filter: RepositoryFilter = {
       ...(after ? { _id: { $gt: after } } : {}),
       ...(options.status ? { status: options.status } : {}),
       ...(options.categoryId
@@ -263,7 +262,11 @@ export class ProductDraftRepository {
     const document = await this.models.ProductDraft.findByIdAndUpdate(
       id,
       { $set: { status: 'archived' } },
-      { new: true, runValidators: true, session: options.session },
+      {
+        returnDocument: 'after',
+        runValidators: true,
+        session: options.session,
+      },
     ).exec();
     if (!document)
       throw new DigikalaDocumentNotFoundError('ProductDraft', String(id));
@@ -371,7 +374,7 @@ export class VariantDraftRepository {
   ): Promise<Page<VariantDraftDocument>> {
     const { limit, after } = pagination(options);
     const productId = objectIdFilter(options.productId, 'productId');
-    const filter: FilterQuery<VariantDraftRecord> = {
+    const filter: RepositoryFilter = {
       ...(after ? { _id: { $gt: after } } : {}),
       ...(productId ? { productId } : {}),
       ...(options.status ? { status: options.status } : {}),
@@ -391,7 +394,11 @@ export class VariantDraftRepository {
     const document = await this.models.VariantDraft.findByIdAndUpdate(
       id,
       { $set: { status: 'archived' } },
-      { new: true, runValidators: true, session: options.session },
+      {
+        returnDocument: 'after',
+        runValidators: true,
+        session: options.session,
+      },
     ).exec();
     if (!document)
       throw new DigikalaDocumentNotFoundError('VariantDraft', String(id));
@@ -469,7 +476,7 @@ export class CategoryRuleRepository {
           { categoryId: data.categoryId },
           { $set: data },
           {
-            new: true,
+            returnDocument: 'after',
             upsert: true,
             runValidators: true,
             setDefaultsOnInsert: true,
@@ -525,7 +532,7 @@ export class PublicationRepository {
   ): Promise<Page<PublicationDocument>> {
     const { limit, after } = pagination(options);
     const productId = objectIdFilter(options.productId, 'productId');
-    const filter: FilterQuery<PublicationRecord> = {
+    const filter: RepositoryFilter = {
       ...(after ? { _id: { $gt: after } } : {}),
       ...(options.panelKey ? { panelKey: options.panelKey } : {}),
       ...(productId ? { productId } : {}),
@@ -549,7 +556,11 @@ export class PublicationRepository {
         $set: { status: 'archived' },
         $push: { statusHistory: { status: 'archived', at: new Date() } },
       },
-      { new: true, runValidators: true, session: options.session },
+      {
+        returnDocument: 'after',
+        runValidators: true,
+        session: options.session,
+      },
     ).exec();
     if (!document)
       throw new DigikalaDocumentNotFoundError('Publication', String(id));
@@ -582,7 +593,7 @@ export class PublicationRepository {
     const document = await translatedWrite(
       () =>
         this.models.Publication.findByIdAndUpdate(id, update, {
-          new: true,
+          returnDocument: 'after',
           runValidators: true,
           session: options.session,
         }).exec(),
@@ -623,7 +634,7 @@ export class PublicationRepository {
     const result = await translatedWrite(
       () =>
         this.models.Publication.findOneAndUpdate(identity, update, {
-          new: true,
+          returnDocument: 'after',
           upsert: true,
           runValidators: true,
           setDefaultsOnInsert: true,
@@ -663,7 +674,7 @@ export class CreationWorkflowRepository {
           { panelKey, productId },
           { $set: { state: parsed } },
           {
-            new: true,
+            returnDocument: 'after',
             upsert: true,
             runValidators: true,
             setDefaultsOnInsert: true,

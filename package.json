@@ -1,6 +1,6 @@
 {
   "name": "digikala-mongoose",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Mongoose persistence and validation for Digikala-ready product catalogs.",
   "type": "module",
   "main": "./dist/index.cjs",

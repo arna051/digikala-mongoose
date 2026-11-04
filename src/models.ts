@@ -57,7 +57,7 @@ function existingOrCreate<T>(
     }
     return existing;
   }
-  return connection.model(name, schema) as Model<T>;
+  return connection.model(name, schema) as unknown as Model<T>;
 }
 
 export function createDigikalaModels(
@@ -342,6 +342,43 @@ export async function ensureDigikalaIndexes(
   );
 }
 
+async function migrateSchemaVersion<T extends { schemaVersion: number }>(
+  model: Model<T>,
+): Promise<number> {
+  const result = await model.updateMany(
+    { schemaVersion: { $exists: false } },
+    { $set: { schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION } },
+    { runValidators: false },
+  );
+  return result.modifiedCount;
+}
+
+async function migratePublicationSchemaVersion(
+  model: Model<PublicationRecord>,
+): Promise<number> {
+  // `updatePipeline` is required at runtime by Mongoose 9 and accepted by
+  // Mongoose 8, whose UpdateOptions type predates the flag.
+  const pipelineOptions = { runValidators: false, updatePipeline: true };
+  const result = await model.updateMany(
+    {
+      $or: [
+        { schemaVersion: { $exists: false } },
+        { statusHistory: { $exists: false } },
+      ],
+    },
+    [
+      {
+        $set: {
+          schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION,
+          statusHistory: { $ifNull: ['$statusHistory', []] },
+        },
+      },
+    ],
+    pipelineOptions,
+  );
+  return result.modifiedCount;
+}
+
 export async function migrateDigikalaData(
   models: DigikalaMongooseModels,
 ): Promise<{ migratedDocuments: number; schemaVersion: number }> {
@@ -359,43 +396,16 @@ export async function migrateDigikalaData(
       );
     }
   }
-  const versionOnlyModels = [
-    models.ProductDraft,
-    models.VariantDraft,
-    models.CategoryRule,
-    models.CreationWorkflow,
-  ];
-  const results = await Promise.all([
-    ...versionOnlyModels.map((model) =>
-      model
-        .updateMany(
-          { schemaVersion: { $exists: false } },
-          { $set: { schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION } },
-          { runValidators: false },
-        )
-        .exec(),
-    ),
-    models.Publication.updateMany(
-      {
-        $or: [
-          { schemaVersion: { $exists: false } },
-          { statusHistory: { $exists: false } },
-        ],
-      },
-      [
-        {
-          $set: {
-            schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION,
-            statusHistory: { $ifNull: ['$statusHistory', []] },
-          },
-        },
-      ],
-      { runValidators: false },
-    ).exec(),
+  const modifiedCounts = await Promise.all([
+    migrateSchemaVersion(models.ProductDraft),
+    migrateSchemaVersion(models.VariantDraft),
+    migrateSchemaVersion(models.CategoryRule),
+    migrateSchemaVersion(models.CreationWorkflow),
+    migratePublicationSchemaVersion(models.Publication),
   ]);
   return {
-    migratedDocuments: results.reduce(
-      (total, result) => total + result.modifiedCount,
+    migratedDocuments: modifiedCounts.reduce(
+      (total, count) => total + count,
       0,
     ),
     schemaVersion: CURRENT_DIGIKALA_SCHEMA_VERSION,

@@ -6,6 +6,12 @@ major version.
 
 ## Unreleased
 
+## 1.1.1 - 2026-11-04
+
+- Restored full Mongoose 9 type and migration compatibility.
+- Replaced deprecated update options with the Mongoose 8/9 API.
+- Pinned kernel-compatible MongoDB and Qdrant CI service images.
+
 ## 1.1.0 - 2026-11-04
 
 - Added full variant replacement and explicit publication update APIs.
