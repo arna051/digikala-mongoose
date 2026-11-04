@@ -37,7 +37,9 @@ export interface MutationOptions {
   session?: ClientSession;
 }
 
-function productInput(document: ProductDraftDocument): ProductDraftInput {
+export function productDraftInputFromDocument(
+  document: ProductDraftDocument,
+): ProductDraftInput {
   return {
     key: document.key,
     status: document.status,
@@ -50,7 +52,9 @@ function productInput(document: ProductDraftDocument): ProductDraftInput {
   };
 }
 
-function variantInput(document: VariantDraftDocument): VariantDraftInput {
+export function variantDraftInputFromDocument(
+  document: VariantDraftDocument,
+): VariantDraftInput {
   return {
     key: document.key,
     productId: String(document.productId),
@@ -111,7 +115,7 @@ export class ProductDraftRepository {
     options: MutationOptions & { persist?: boolean } = {},
   ): Promise<CategoryValidationResult> {
     const product = await this.requireById(id);
-    const plain = productInput(product);
+    const plain = productDraftInputFromDocument(product);
     const category = await this.categories.findByCategoryId(
       product.details.categoryId,
     );
@@ -134,7 +138,7 @@ export class ProductDraftRepository {
   ): Promise<ProductPublicationPayloads> {
     const product = await this.requireById(id);
     return buildProductPublicationPayloads(
-      ProductDraftInputSchema.parse(productInput(product)),
+      ProductDraftInputSchema.parse(productDraftInputFromDocument(product)),
       remoteDraftProductId,
     );
   }
@@ -174,7 +178,9 @@ export class VariantDraftRepository {
     remoteProductId: number,
   ): Promise<VariantPublicationPayload> {
     const variant = await this.requireById(id);
-    const data = VariantDraftInputSchema.parse(variantInput(variant));
+    const data = VariantDraftInputSchema.parse(
+      variantDraftInputFromDocument(variant),
+    );
     return buildVariantPublicationPayload(data, remoteProductId);
   }
 }

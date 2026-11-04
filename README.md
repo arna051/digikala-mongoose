@@ -393,9 +393,51 @@ createDigikalaMongoose({
 });
 ```
 
-## Transactions
+## Standalone MongoDB safety
 
-Repository writes accept an optional Mongoose session:
+Standalone MongoDB is fully supported and does not require transactions. Use
+the idempotent orchestrator when one logical operation spans a product,
+variants, and panel mappings:
+
+```ts
+const result = await digikalaDb.standalone.ensureCatalog({
+  product: productInput,
+  variants: [
+    { key: 'MUG-WHITE', input: whiteVariantInput },
+    { key: 'MUG-BLACK', input: blackVariantInput },
+  ],
+  publications: [
+    { panelKey: 'main-panel', status: 'queued' },
+    {
+      panelKey: 'main-panel',
+      variantKey: 'MUG-WHITE',
+      status: 'queued',
+    },
+  ],
+});
+
+console.log(result.resumed);
+```
+
+The full input is validated before the first write. Each item uses its stable
+key as an idempotency identity. If the process stops after any step, call
+`ensureCatalog()` again with the same input: existing matching documents are
+reused and only missing steps are created.
+
+The orchestrator deliberately preserves valid partial progress. It never
+pretends that multiple standalone writes are atomic and never deletes a
+product to compensate for a later failure. A reused key with different data
+throws `DigikalaIdentityConflictError`; unexpected failures throw
+`DigikalaStandaloneOperationError` with completed-step information in
+`error.progress`.
+
+Call `ensureIndexes()` before accepting orchestration work because unique
+indexes provide race-safe idempotency.
+
+## Optional transactions
+
+MongoDB transactions require a replica set or mongos. Repository writes accept
+an optional Mongoose session for applications that have one:
 
 ```ts
 await connection.transaction(async (session) => {

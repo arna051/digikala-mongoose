@@ -7,6 +7,7 @@ const nestjs = await import('digikala-mongoose/nestjs');
 const qdrant = await import('digikala-mongoose/qdrant');
 
 assert.equal(typeof root.createDigikalaMongoose, 'function');
+assert.equal(typeof root.createDigikalaStandaloneOrchestrator, 'function');
 assert.equal(typeof root.ProductDraftInputSchema.safeParse, 'function');
 assert.equal(typeof root.VariantCreateInputSchema.safeParse, 'function');
 assert.equal(typeof nestjs.DigikalaMongooseModule.forRootAsync, 'function');

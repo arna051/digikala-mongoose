@@ -9,6 +9,7 @@ export {
   buildVariantPublicationPayload,
 } from './payloads.js';
 export * from './repositories.js';
+export * from './standalone.js';
 export * from './types.js';
 export { assertValidProductDraft, validateProductDraft } from './validation.js';
 export type {

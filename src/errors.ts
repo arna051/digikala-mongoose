@@ -12,6 +12,35 @@ export class DigikalaDocumentNotFoundError extends DigikalaMongooseError {
   }
 }
 
+export interface DigikalaStandaloneProgress {
+  productKey: string;
+  productId?: string;
+  completedVariantKeys: string[];
+  completedPublicationKeys: string[];
+}
+
+export class DigikalaIdentityConflictError extends DigikalaMongooseError {
+  constructor(
+    public readonly entity: 'product' | 'variant' | 'publication',
+    public readonly identifier: string,
+    message = `${entity} identity conflicts with existing data: ${identifier}`,
+  ) {
+    super(message);
+    this.name = 'DigikalaIdentityConflictError';
+  }
+}
+
+export class DigikalaStandaloneOperationError extends DigikalaMongooseError {
+  constructor(
+    public readonly step: string,
+    public readonly progress: DigikalaStandaloneProgress,
+    options?: ErrorOptions,
+  ) {
+    super(`Standalone catalog operation failed at ${step}`, options);
+    this.name = 'DigikalaStandaloneOperationError';
+  }
+}
+
 export class DigikalaCategoryValidationError extends DigikalaMongooseError {
   constructor(
     public readonly issues: readonly DigikalaCategoryValidationIssue[],
