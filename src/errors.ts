@@ -41,6 +41,19 @@ export class DigikalaConcurrencyError extends DigikalaMongooseError {
   }
 }
 
+export class DigikalaUnsupportedSchemaVersionError extends DigikalaMongooseError {
+  constructor(
+    public readonly entity: string,
+    public readonly foundVersion: number,
+    public readonly supportedVersion: number,
+  ) {
+    super(
+      `${entity} uses schema version ${foundVersion}, but this package supports up to ${supportedVersion}`,
+    );
+    this.name = 'DigikalaUnsupportedSchemaVersionError';
+  }
+}
+
 export interface DigikalaStandaloneProgress {
   productKey: string;
   productId?: string;

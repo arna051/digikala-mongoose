@@ -72,6 +72,15 @@ describe('optional Qdrant adapter', () => {
       DigikalaQdrantCompatibilityError,
     );
     expect(client.createCollection).not.toHaveBeenCalled();
+
+    client.getCollection = vi.fn(() =>
+      Promise.resolve({
+        config: { params: { vectors: { size: 3, distance: 'Dot' } } },
+      }),
+    );
+    await expect(index.ensureCollection()).rejects.toThrow(
+      'expected Cosine distance but found Dot',
+    );
   });
 
   it('batches large upserts and records the embedding model', async () => {

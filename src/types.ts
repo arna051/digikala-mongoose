@@ -99,11 +99,22 @@ export interface DigikalaMongooseOptions {
 }
 
 export interface DigikalaMongooseEvent {
-  operation: 'standalone.ensureCatalog';
+  eventId: string;
+  timestamp: string;
+  operation:
+    | 'standalone.ensureCatalog'
+    | 'database.migrate'
+    | 'database.ensureIndexes'
+    | 'database.ensureReady';
   phase: 'started' | 'succeeded' | 'failed';
-  productKey: string;
+  productKey?: string;
   durationMs?: number;
-  error?: unknown;
+  details?: Readonly<Record<string, string | number | boolean>>;
+  error?: {
+    name: string;
+    message: string;
+    code?: string;
+  };
 }
 
 export interface DigikalaMongooseObserver {

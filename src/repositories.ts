@@ -7,10 +7,12 @@ import {
   CategoryRuleInputSchema,
   ProductDraftInputSchema,
   PublicationInputSchema,
+  PublicationUpdateSchema,
   VariantDraftInputSchema,
   type CategoryRuleInput,
   type ProductDraftInput,
   type PublicationInput,
+  type PublicationUpdate,
   type VariantDraftInput,
 } from './contracts.js';
 import {
@@ -98,6 +100,18 @@ function page<T extends { _id: unknown }>(items: T[], limit: number): Page<T> {
     items: visible,
     ...(hasMore ? { nextCursor: String(visible.at(-1)!._id) } : {}),
   };
+}
+
+function objectIdFilter(
+  value: string | Types.ObjectId | undefined,
+  field: string,
+): Types.ObjectId | undefined {
+  if (value === undefined) return undefined;
+  if (value instanceof Types.ObjectId) return value;
+  if (!Types.ObjectId.isValid(value)) {
+    throw new TypeError(`${field} must be a MongoDB ObjectId`);
+  }
+  return new Types.ObjectId(value);
 }
 
 function isDuplicateKey(error: unknown): boolean {
@@ -281,8 +295,11 @@ export class ProductDraftRepository {
     options: MutationOptions = {},
   ): Promise<ProductDraftDocument> {
     const product = await this.requireById(id, options);
-    product.set(ProductDraftInputSchema.parse(input));
-    product.validation = { valid: false, issues: [] };
+    product.overwrite({
+      ...ProductDraftInputSchema.parse(input),
+      schemaVersion: product.schemaVersion,
+      validation: { valid: false, issues: [] },
+    });
     try {
       return await product.save(options);
     } catch (error) {
@@ -353,9 +370,10 @@ export class VariantDraftRepository {
     options: VariantListOptions = {},
   ): Promise<Page<VariantDraftDocument>> {
     const { limit, after } = pagination(options);
+    const productId = objectIdFilter(options.productId, 'productId');
     const filter: FilterQuery<VariantDraftRecord> = {
       ...(after ? { _id: { $gt: after } } : {}),
-      ...(options.productId ? { productId: options.productId } : {}),
+      ...(productId ? { productId } : {}),
       ...(options.status ? { status: options.status } : {}),
     };
     const items = await this.models.VariantDraft.find(filter)
@@ -380,17 +398,40 @@ export class VariantDraftRepository {
     return document;
   }
 
-  findById(id: string | Types.ObjectId): Promise<VariantDraftDocument | null> {
-    return this.models.VariantDraft.findById(id).exec();
+  findById(
+    id: string | Types.ObjectId,
+    options: QueryOptions = {},
+  ): Promise<VariantDraftDocument | null> {
+    return this.models.VariantDraft.findById(id)
+      .session(options.session ?? null)
+      .exec();
   }
 
   async requireById(
     id: string | Types.ObjectId,
+    options: QueryOptions = {},
   ): Promise<VariantDraftDocument> {
-    const variant = await this.findById(id);
+    const variant = await this.findById(id, options);
     if (!variant)
       throw new DigikalaDocumentNotFoundError('VariantDraft', String(id));
     return variant;
+  }
+
+  async replace(
+    id: string | Types.ObjectId,
+    input: VariantDraftInput,
+    options: MutationOptions = {},
+  ): Promise<VariantDraftDocument> {
+    const variant = await this.requireById(id, options);
+    variant.overwrite({
+      ...VariantDraftInputSchema.parse(input),
+      schemaVersion: variant.schemaVersion,
+    });
+    try {
+      return await variant.save(options);
+    } catch (error) {
+      translateWriteError(error, 'VariantDraft', String(id));
+    }
   }
 
   async buildPublicationPayload(
@@ -483,10 +524,11 @@ export class PublicationRepository {
     options: PublicationListOptions = {},
   ): Promise<Page<PublicationDocument>> {
     const { limit, after } = pagination(options);
+    const productId = objectIdFilter(options.productId, 'productId');
     const filter: FilterQuery<PublicationRecord> = {
       ...(after ? { _id: { $gt: after } } : {}),
       ...(options.panelKey ? { panelKey: options.panelKey } : {}),
-      ...(options.productId ? { productId: options.productId } : {}),
+      ...(productId ? { productId } : {}),
       ...(options.status ? { status: options.status } : {}),
     };
     const items = await this.models.Publication.find(filter)
@@ -512,6 +554,45 @@ export class PublicationRepository {
     if (!document)
       throw new DigikalaDocumentNotFoundError('Publication', String(id));
     return document;
+  }
+
+  async update(
+    id: string | Types.ObjectId,
+    input: PublicationUpdate,
+    options: MutationOptions = {},
+  ): Promise<PublicationDocument> {
+    const data = PublicationUpdateSchema.parse(input);
+    const { status, ...fields } = data;
+    const set = Object.fromEntries(
+      Object.entries(fields).filter(([, value]) => value != null),
+    );
+    const unset = Object.fromEntries(
+      Object.entries(fields)
+        .filter(([, value]) => value === null)
+        .map(([field]) => [field, 1]),
+    );
+    if (status !== undefined) set.status = status;
+    const update = {
+      ...(Object.keys(set).length ? { $set: set } : {}),
+      ...(Object.keys(unset).length ? { $unset: unset } : {}),
+      ...(status === undefined
+        ? {}
+        : { $push: { statusHistory: { status, at: new Date() } } }),
+    };
+    const document = await translatedWrite(
+      () =>
+        this.models.Publication.findByIdAndUpdate(id, update, {
+          new: true,
+          runValidators: true,
+          session: options.session,
+        }).exec(),
+      'Publication',
+      String(id),
+    );
+    if (!document) {
+      throw new DigikalaDocumentNotFoundError('Publication', String(id));
+    }
+    return document as PublicationDocument;
   }
 
   async upsert(

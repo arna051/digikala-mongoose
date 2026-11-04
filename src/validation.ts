@@ -99,6 +99,15 @@ function zodIssueCode(code: string): DigikalaCategoryValidationIssue['code'] {
   }
 }
 
+function unsafePattern(pattern: string): boolean {
+  return (
+    pattern.length > 256 ||
+    /\\[1-9]/.test(pattern) ||
+    /\([^)]*[+*][^)]*\)[+*{]/.test(pattern) ||
+    /(?:\.\*){2,}|(?:\.\+){2,}/.test(pattern)
+  );
+}
+
 export function validateProductDraft(
   input: ProductDraftInput,
   rules?: CategoryValidationRuleSet,
@@ -170,6 +179,7 @@ export function validateProductDraft(
     }
     if (rule.pattern && typeof value === 'string') {
       try {
+        if (unsafePattern(rule.pattern)) throw new SyntaxError('unsafe');
         if (!new RegExp(rule.pattern).test(value)) {
           issues.push({
             path: rule.path,

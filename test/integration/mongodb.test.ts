@@ -5,6 +5,7 @@ import {
   DigikalaStandaloneOperationError,
   DigikalaDocumentNotFoundError,
   DigikalaDuplicateIdentityError,
+  DigikalaUnsupportedSchemaVersionError,
   createDigikalaMongoose,
   type DigikalaMongoose,
   type StandaloneCatalogInput,
@@ -59,7 +60,9 @@ const catalogInput = {
 integration('standalone MongoDB integration', () => {
   let driver: Mongoose;
   let connection: Connection;
+  let secondConnection: Connection;
   let db: DigikalaMongoose;
+  let secondDb: DigikalaMongoose;
 
   beforeAll(async () => {
     driver = new Mongoose();
@@ -75,18 +78,32 @@ integration('standalone MongoDB integration', () => {
       collectionPrefix: 'integration_',
     });
     await db.ensureIndexes();
+    secondConnection = await driver
+      .createConnection(mongoUri!, {
+        dbName: databaseName,
+        serverSelectionTimeoutMS: 10_000,
+      })
+      .asPromise();
+    secondDb = createDigikalaMongoose({
+      connection: secondConnection,
+      modelPrefix: 'Integration',
+      collectionPrefix: 'integration_',
+    });
   });
 
   afterAll(async () => {
     if (!driver) return;
     if (connection.readyState === 1) await connection.dropDatabase();
+    await secondConnection.close();
     await connection.close();
   });
 
   it('converges concurrent first writes to one catalog', async () => {
     const results = await Promise.all(
-      Array.from({ length: 20 }, () =>
-        db.standalone.ensureCatalog(catalogInput),
+      Array.from({ length: 20 }, (_, index) =>
+        (index % 2 === 0 ? db : secondDb).standalone.ensureCatalog(
+          catalogInput,
+        ),
       ),
     );
 
@@ -165,6 +182,56 @@ integration('standalone MongoDB integration', () => {
     expect(updated.statusHistory).toHaveLength(1);
   });
 
+  it('replaces mutable drafts and explicitly updates publication state', async () => {
+    const product = await db.repositories.products.findByKey('integration-mug');
+    const variant = await db.repositories.variants.findByKey(
+      'INTEGRATION-MUG-WHITE',
+    );
+    const publication = await db.models.Publication.findOne({
+      panelKey: 'status-panel',
+    }).orFail();
+    const productCreatedAt = product!.createdAt.getTime();
+    const variantCreatedAt = variant!.createdAt.getTime();
+
+    const replacedProduct = await db.repositories.products.replace(
+      product!.id,
+      {
+        ...catalogInput.product,
+        title: undefined,
+        metadata: { source: 'replacement' },
+      },
+    );
+    const replacedVariant = await db.repositories.variants.replace(
+      variant!.id,
+      {
+        key: variant!.key,
+        productId: product!.id,
+        status: 'ready',
+        input: { ...variant!.input, orderLimit: 7 },
+      },
+    );
+    const updatedPublication = await db.repositories.publications.update(
+      publication.id,
+      { status: 'failed', lastError: 'integration failure' },
+    );
+
+    expect(replacedProduct.title).toBeUndefined();
+    expect(replacedProduct.metadata).toEqual({ source: 'replacement' });
+    expect(replacedProduct.createdAt.getTime()).toBe(productCreatedAt);
+    expect(replacedVariant.input.orderLimit).toBe(7);
+    expect(replacedVariant.createdAt.getTime()).toBe(variantCreatedAt);
+    expect(updatedPublication.status).toBe('failed');
+    expect(updatedPublication.lastError).toBe('integration failure');
+    expect(updatedPublication.statusHistory.at(-1)?.status).toBe('failed');
+
+    const recoveredPublication = await db.repositories.publications.update(
+      publication.id,
+      { status: 'queued', lastError: null },
+    );
+    expect(recoveredPublication.lastError).toBeUndefined();
+    expect(recoveredPublication.statusHistory.at(-1)?.status).toBe('queued');
+  });
+
   it('does not resolve a variant mapping through the wrong product', async () => {
     const mapping = await db.models.Publication.findOne({
       panelKey: 'integration-panel',
@@ -221,6 +288,51 @@ integration('standalone MongoDB integration', () => {
     await db.models.Publication.collection.deleteOne({
       _id: legacyPublicationId,
     });
+  });
+
+  it('rejects data created by a newer incompatible schema version', async () => {
+    const futureId = new mongoose.Types.ObjectId();
+    await db.models.ProductDraft.collection.insertOne({
+      _id: futureId,
+      schemaVersion: 999,
+      key: 'future-product',
+      status: 'draft',
+      details: catalogInput.product.details,
+      images: [],
+      validation: { valid: false, issues: [] },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await expect(db.ensureReady()).rejects.toBeInstanceOf(
+      DigikalaUnsupportedSchemaVersionError,
+    );
+    await db.models.ProductDraft.collection.deleteOne({ _id: futureId });
+  });
+
+  it('emits structured readiness telemetry without exposing documents', async () => {
+    const events: unknown[] = [];
+    const observed = createDigikalaMongoose({
+      connection,
+      modelPrefix: 'Integration',
+      collectionPrefix: 'integration_',
+      observer: { onEvent: (event) => void events.push(event) },
+    });
+
+    await observed.ensureReady();
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: 'database.ensureReady',
+          phase: 'succeeded',
+          eventId: expect.any(String),
+          timestamp: expect.any(String),
+          details: expect.objectContaining({ schemaVersion: 1 }),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain('integration-mug');
   });
 
   it('supports bounded bulk writes, cursor pagination, and archiving', async () => {
@@ -334,6 +446,12 @@ integration('standalone MongoDB integration', () => {
     await expect(
       db.repositories.products.list({ after: 'invalid' }),
     ).rejects.toThrow('MongoDB ObjectId');
+    await expect(
+      db.repositories.variants.list({ productId: 'invalid' }),
+    ).rejects.toThrow('productId must be a MongoDB ObjectId');
+    await expect(
+      db.repositories.publications.list({ productId: 'invalid' }),
+    ).rejects.toThrow('productId must be a MongoDB ObjectId');
 
     expect((await db.repositories.variants.archive(variant!.id)).status).toBe(
       'archived',

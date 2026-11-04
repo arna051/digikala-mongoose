@@ -23,7 +23,10 @@ import type {
   PublicationRecord,
   VariantDraftRecord,
 } from './types.js';
-import { DigikalaConfigurationError } from './errors.js';
+import {
+  DigikalaConfigurationError,
+  DigikalaUnsupportedSchemaVersionError,
+} from './errors.js';
 
 export const CURRENT_DIGIKALA_SCHEMA_VERSION = 1;
 
@@ -342,6 +345,20 @@ export async function ensureDigikalaIndexes(
 export async function migrateDigikalaData(
   models: DigikalaMongooseModels,
 ): Promise<{ migratedDocuments: number; schemaVersion: number }> {
+  for (const [entity, model] of Object.entries(models)) {
+    const future = await model
+      .findOne({ schemaVersion: { $gt: CURRENT_DIGIKALA_SCHEMA_VERSION } })
+      .select({ schemaVersion: 1 })
+      .lean()
+      .exec();
+    if (future) {
+      throw new DigikalaUnsupportedSchemaVersionError(
+        entity,
+        future.schemaVersion,
+        CURRENT_DIGIKALA_SCHEMA_VERSION,
+      );
+    }
+  }
   const versionOnlyModels = [
     models.ProductDraft,
     models.VariantDraft,

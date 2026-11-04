@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import {
@@ -229,15 +230,38 @@ function samePublication(
   );
 }
 
+function errorSummary(error: unknown): {
+  name: string;
+  message: string;
+  code?: string;
+} {
+  if (!(error instanceof Error)) {
+    return { name: 'UnknownError', message: String(error) };
+  }
+  const code = (error as Error & { code?: unknown }).code;
+  return {
+    name: error.name,
+    message: error.message,
+    ...(typeof code === 'string' ? { code } : {}),
+  };
+}
+
 export function createDigikalaStandaloneOrchestrator(
   repositories: DigikalaMongooseRepositories,
   options: DigikalaStandaloneOrchestratorOptions = {},
 ): DigikalaStandaloneOrchestrator {
   const emit = async (
-    event: Parameters<DigikalaMongooseObserver['onEvent']>[0],
+    event: Omit<
+      Parameters<DigikalaMongooseObserver['onEvent']>[0],
+      'eventId' | 'timestamp'
+    >,
   ): Promise<void> => {
     try {
-      await options.observer?.onEvent(event);
+      await options.observer?.onEvent({
+        ...event,
+        eventId: randomUUID(),
+        timestamp: new Date().toISOString(),
+      });
     } catch {
       // Telemetry must never change persistence outcomes.
     }
@@ -259,7 +283,7 @@ export function createDigikalaStandaloneOrchestrator(
           phase: 'failed',
           productKey: input.product.key,
           durationMs: Date.now() - started,
-          error,
+          error: errorSummary(error),
         });
         throw error;
       }
@@ -426,7 +450,7 @@ export function createDigikalaStandaloneOrchestrator(
           phase: 'failed',
           productKey: parsed.product.key,
           durationMs: Date.now() - started,
-          error: surfaced,
+          error: errorSummary(surfaced),
         });
         throw surfaced;
       }

@@ -6,6 +6,15 @@ major version.
 
 ## Unreleased
 
+## 1.1.0 - 2026-11-04
+
+- Added full variant replacement and explicit publication update APIs.
+- Made product replacement remove omitted optional fields.
+- Rejected unsupported future database schema versions during startup.
+- Added structured migration, index, readiness, and orchestration telemetry.
+- Added cross-connection concurrency, update, migration-guard, event-redaction,
+  prototype-pollution, and unsafe-pattern regression coverage.
+
 ## 1.0.1 - 2026-11-04
 
 - Backfilled `statusHistory` for legacy publication records during migration.

@@ -112,4 +112,18 @@ integration('Qdrant integration', () => {
       DigikalaQdrantCompatibilityError,
     );
   });
+
+  it('rejects a different embedding model with the same dimensions', async () => {
+    const incompatible = createDigikalaQdrantIndex({
+      client,
+      collectionName,
+      vectorSize: 3,
+      embeddingModel: 'integration-model@2',
+      embeddingProvider: { embed: () => Promise.resolve([[1, 0, 0]]) },
+    });
+
+    await expect(incompatible.ensureCollection()).rejects.toThrow(
+      'expected embedding model integration-model@2 but found integration-model@1',
+    );
+  });
 });

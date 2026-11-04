@@ -10,6 +10,8 @@ assert.equal(typeof root.createDigikalaMongoose, 'function');
 assert.equal(typeof root.createDigikalaStandaloneOrchestrator, 'function');
 assert.equal(typeof root.ProductDraftInputSchema.safeParse, 'function');
 assert.equal(typeof root.VariantCreateInputSchema.safeParse, 'function');
+assert.equal(typeof root.PublicationUpdateSchema.safeParse, 'function');
+assert.equal(typeof root.DigikalaUnsupportedSchemaVersionError, 'function');
 assert.equal(typeof nestjs.DigikalaMongooseModule.forRootAsync, 'function');
 assert.equal(typeof qdrant.createDigikalaQdrantIndex, 'function');
 

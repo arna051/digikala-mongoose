@@ -243,6 +243,29 @@ const created = await digikalaClient.variantCreation.create(input);
 The local variant stores no fake remote product ID. The real ID is injected and
 validated only when publishing.
 
+## Updating drafts and mappings
+
+Draft replacement validates the complete new object and removes optional fields
+that are no longer present. It retains the MongoDB identity and schema version:
+
+```ts
+await digikalaDb.repositories.products.replace(product.id, nextProduct);
+await digikalaDb.repositories.variants.replace(variant.id, nextVariant);
+```
+
+Update an existing panel mapping without invoking upsert semantics. Supplying a
+status also appends an auditable `statusHistory` entry:
+
+```ts
+await digikalaDb.repositories.publications.update(publication.id, {
+  status: 'failed',
+  lastError: 'Remote validation failed',
+  synchronizedAt: new Date(),
+});
+```
+
+Pass `null` for an optional mapping field such as `lastError` to remove it.
+
 ## Multiple seller panels
 
 One local product or variant can map to any number of Digikala panels:
@@ -438,7 +461,9 @@ throws `DigikalaIdentityConflictError`; unexpected failures throw
 
 Call `ensureReady()` before accepting orchestration work. It runs idempotent
 schema migrations and creates the unique indexes that provide race-safe
-idempotency.
+idempotency. Startup fails with `DigikalaUnsupportedSchemaVersionError` if the
+database contains records written by a newer incompatible package version;
+never downgrade past that guard.
 
 Inspect state without writing when recovering an uncertain job:
 
@@ -469,17 +494,37 @@ createDigikalaMongoose({
 ```
 
 Observer failures never change persistence outcomes.
+Events contain `eventId`, ISO `timestamp`, `operation`, `phase`, and optional
+`durationMs`, `details`, and sanitized error identity. Events cover standalone
+catalog orchestration, migrations, index creation, and combined readiness. Raw
+drafts and payloads are never included.
+
+## Repository API stability
+
+The following repository methods are stable within the `1.x` line:
+
+| Repository     | Stable operations                                                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `products`     | `create`, `replace`, `findByKey`, `findById`, `requireById`, `list`, `archive`, `validateForPublication`, `buildPublicationPayloads` |
+| `variants`     | `create`, `replace`, `findByKey`, `findById`, `requireById`, `list`, `archive`, `buildPublicationPayload`                            |
+| `categories`   | `upsert`, `findByCategoryId`, `isFresh`                                                                                              |
+| `publications` | `upsert`, `update`, `findForProduct`, `findForVariant`, `list`, `archive`                                                            |
+| `workflows`    | `save`, `find`                                                                                                                       |
+
+Documented exports follow Semantic Versioning. Removing or incompatibly
+changing one requires a new major version.
 
 ## Stable errors
 
-| Error                                | Meaning                                      |
-| ------------------------------------ | -------------------------------------------- |
-| `DigikalaDuplicateIdentityError`     | A repository unique identity already exists  |
-| `DigikalaConcurrencyError`           | Optimistic concurrency rejected a stale save |
-| `DigikalaIdentityConflictError`      | An idempotency key points to different data  |
-| `DigikalaStandaloneOperationError`   | A resumable multi-step operation was stopped |
-| `DigikalaCategoryNormalizationError` | A live category response was malformed       |
-| `DigikalaQdrantCompatibilityError`   | Vector collection configuration is unsafe    |
+| Error                                   | Meaning                                      |
+| --------------------------------------- | -------------------------------------------- |
+| `DigikalaDuplicateIdentityError`        | A repository unique identity already exists  |
+| `DigikalaConcurrencyError`              | Optimistic concurrency rejected a stale save |
+| `DigikalaUnsupportedSchemaVersionError` | Stored data requires a newer package version |
+| `DigikalaIdentityConflictError`         | An idempotency key points to different data  |
+| `DigikalaStandaloneOperationError`      | A resumable multi-step operation was stopped |
+| `DigikalaCategoryNormalizationError`    | A live category response was malformed       |
+| `DigikalaQdrantCompatibilityError`      | Vector collection configuration is unsafe    |
 
 ## Optional transactions
 

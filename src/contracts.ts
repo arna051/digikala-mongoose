@@ -165,6 +165,24 @@ export const PublicationInputSchema = z
   })
   .strict();
 
+export const PublicationUpdateSchema = z
+  .object({
+    status: PublicationStatusSchema.optional(),
+    remoteProductId: z.number().int().positive().nullable().optional(),
+    remoteDraftProductId: z.number().int().positive().nullable().optional(),
+    remoteVariantId: z.number().int().positive().nullable().optional(),
+    supplierCode: z.string().trim().min(1).nullable().optional(),
+    payload: jsonValue.optional(),
+    payloadHash: z.string().nullable().optional(),
+    lastError: z.string().nullable().optional(),
+    synchronizedAt: z.coerce.date().nullable().optional(),
+    metadata: z.record(z.string(), jsonValue).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one publication field must be updated',
+  });
+
 export type ProductDraftInput = z.input<typeof ProductDraftInputSchema>;
 export type ProductDraftData = z.output<typeof ProductDraftInputSchema>;
 export type ProductDraftStatus = z.output<typeof ProductDraftStatusSchema>;
@@ -181,3 +199,4 @@ export type CategoryRuleData = z.output<typeof CategoryRuleInputSchema>;
 export type PublicationInput = z.input<typeof PublicationInputSchema>;
 export type PublicationData = z.output<typeof PublicationInputSchema>;
 export type PublicationStatus = z.output<typeof PublicationStatusSchema>;
+export type PublicationUpdate = z.input<typeof PublicationUpdateSchema>;

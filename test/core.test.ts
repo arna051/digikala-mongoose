@@ -250,6 +250,44 @@ describe('Digikala-compatible contracts', () => {
     );
   });
 
+  it('rejects unsafe remote validation patterns without executing them', () => {
+    const started = performance.now();
+    const result = validateProductDraft(
+      {
+        ...ProductDraftInputSchema.parse(product),
+        metadata: { candidate: `${'a'.repeat(20_000)}!` },
+      },
+      {
+        categoryId: 10707,
+        version: 'unsafe-pattern',
+        fields: [
+          {
+            path: 'metadata.candidate',
+            label: 'candidate',
+            type: 'string',
+            required: true,
+            pattern: '(a+)+$',
+            sortOrder: 0,
+          },
+        ],
+      },
+    );
+
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ code: 'invalid_format' }),
+    );
+  });
+
+  it('does not allow metadata to pollute object prototypes', () => {
+    const metadata = JSON.parse('{"__proto__":{"polluted":true}}') as Record<
+      string,
+      unknown
+    >;
+    ProductDraftInputSchema.parse({ ...product, metadata });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it('builds a validated variant request only after a remote product exists', () => {
     const parsed = VariantDraftInputSchema.parse({
       key: 'MUG-WHITE',
