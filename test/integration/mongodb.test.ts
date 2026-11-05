@@ -280,9 +280,9 @@ integration('standalone MongoDB integration', () => {
     });
 
     expect(first.migratedDocuments).toBe(2);
-    expect(first.schemaVersion).toBe(1);
+    expect(first.schemaVersion).toBe(2);
     expect(second.migratedDocuments).toBe(0);
-    expect(migrated?.schemaVersion).toBe(1);
+    expect(migrated?.schemaVersion).toBe(2);
     expect(migratedPublication?.statusHistory).toEqual([]);
     await db.models.ProductDraft.collection.deleteOne({ _id: legacyId });
     await db.models.Publication.collection.deleteOne({
@@ -328,7 +328,7 @@ integration('standalone MongoDB integration', () => {
           phase: 'succeeded',
           eventId: expect.any(String),
           timestamp: expect.any(String),
-          details: expect.objectContaining({ schemaVersion: 1 }),
+          details: expect.objectContaining({ schemaVersion: 2 }),
         }),
       ]),
     );
@@ -460,7 +460,7 @@ integration('standalone MongoDB integration', () => {
       (await db.repositories.publications.archive(publicationPage.items[0]!.id))
         .status,
     ).toBe('archived');
-    expect((await db.ensureReady()).schemaVersion).toBe(1);
+    expect((await db.ensureReady()).schemaVersion).toBe(2);
   });
 
   it('sustains a bounded 100-product standalone workload', async () => {

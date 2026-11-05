@@ -6,6 +6,14 @@ major version.
 
 ## Unreleased
 
+## 1.2.0 - 2026-11-05
+
+- Added Service Hub product moderation states and duplicate-product tracking.
+- Persisted category-specific variant requirements and their fetch timestamp.
+- Added pre-publication validation for lead time, package dimensions, size
+  guides, main images, and one- or two-theme variants.
+- Upgraded the Digikala SDK dependency to `0.5.0` and database schema to 2.
+
 ## 1.1.1 - 2026-11-04
 
 - Restored full Mongoose 9 type and migration compatibility.

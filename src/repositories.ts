@@ -166,6 +166,9 @@ export function productDraftInputFromDocument(
     ...(document.attributes ? { attributes: document.attributes } : {}),
     ...(document.saveOptions ? { saveOptions: document.saveOptions } : {}),
     images: document.images,
+    ...(document.duplicateProductId
+      ? { duplicateProductId: document.duplicateProductId }
+      : {}),
     ...(document.metadata ? { metadata: document.metadata } : {}),
   };
 }
@@ -178,6 +181,10 @@ export function variantDraftInputFromDocument(
     productId: String(document.productId),
     status: document.status,
     input: document.input,
+    ...(document.requirements ? { requirements: document.requirements } : {}),
+    ...(document.requirementsFetchedAt
+      ? { requirementsFetchedAt: document.requirementsFetchedAt }
+      : {}),
     ...(document.metadata ? { metadata: document.metadata } : {}),
   };
 }

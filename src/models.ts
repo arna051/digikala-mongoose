@@ -5,6 +5,7 @@ import {
   ProductSaveInputSchema,
   ProductTitleInputSchema,
   VariantCreateInputSchema,
+  VariantCreationRequirementsSchema,
 } from 'digikala/schemas';
 import { Schema, type Connection, type Model } from 'mongoose';
 import {
@@ -28,7 +29,7 @@ import {
   DigikalaUnsupportedSchemaVersionError,
 } from './errors.js';
 
-export const CURRENT_DIGIKALA_SCHEMA_VERSION = 1;
+export const CURRENT_DIGIKALA_SCHEMA_VERSION = 2;
 
 function zodValidator(schema: {
   safeParse(value: unknown): { success: boolean };
@@ -129,6 +130,7 @@ export function createDigikalaModels(
         default: [],
         validate: zodValidator(ProductImageSchema.array()),
       } as any,
+      duplicateProductId: Number,
       metadata: { type: Schema.Types.Mixed },
       validation: {
         valid: { type: Boolean, required: true, default: false },
@@ -168,6 +170,11 @@ export function createDigikalaModels(
           VariantCreateInputSchema.omit({ productId: true }),
         ),
       },
+      requirements: {
+        type: Schema.Types.Mixed,
+        validate: zodValidator(VariantCreationRequirementsSchema),
+      },
+      requirementsFetchedAt: Date,
       metadata: { type: Schema.Types.Mixed },
     },
     { ...shared, collection: `${collectionPrefix}variants` },

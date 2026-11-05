@@ -4,6 +4,7 @@ import {
   ProductSaveInputSchema,
   ProductTitleInputSchema,
   VariantCreateInputSchema,
+  validateVariantCreationInput,
 } from 'digikala/schemas';
 import type {
   ProductPublicationPayloads,
@@ -45,8 +46,9 @@ export function buildVariantPublicationPayload(
   variant: VariantDraftData,
   remoteProductId: number,
 ): VariantPublicationPayload {
-  return VariantCreateInputSchema.parse({
+  const input = VariantCreateInputSchema.parse({
     productId: remoteProductId,
     ...variant.input,
   });
+  return validateVariantCreationInput(input, variant.requirements);
 }

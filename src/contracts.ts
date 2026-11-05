@@ -4,6 +4,7 @@ import {
   ProductSaveInputSchema,
   ProductTitleInputSchema,
   VariantCreateInputSchema,
+  VariantCreationRequirementsSchema,
 } from 'digikala/schemas';
 import { z } from 'zod';
 
@@ -19,8 +20,12 @@ export const ProductDraftStatusSchema = z.enum([
   'ready',
   'publishing',
   'pending_moderation',
+  'waiting_for_confirm',
   'approved',
   'rejected',
+  'in_review',
+  'removed',
+  'duplicate',
   'archived',
 ]);
 
@@ -49,6 +54,7 @@ export const ProductDraftInputSchema = z
       draftProductId: true,
     }).optional(),
     images: z.array(ProductImageSchema).default([]),
+    duplicateProductId: z.number().int().positive().optional(),
     metadata: z.record(z.string(), jsonValue).optional(),
   })
   .strict();
@@ -68,6 +74,8 @@ export const VariantDraftInputSchema = z
     productId: objectId,
     status: VariantDraftStatusSchema.default('draft'),
     input: VariantCreateInputSchema.omit({ productId: true }),
+    requirements: VariantCreationRequirementsSchema.optional(),
+    requirementsFetchedAt: z.coerce.date().optional(),
     metadata: z.record(z.string(), jsonValue).optional(),
   })
   .strict();

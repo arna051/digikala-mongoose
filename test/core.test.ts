@@ -308,6 +308,34 @@ describe('Digikala-compatible contracts', () => {
       orderLimit: 2,
     });
   });
+
+  it('persists multi-theme requirements and enforces them before publication', () => {
+    const parsed = VariantDraftInputSchema.parse({
+      key: 'SHIRT-BLUE-L',
+      productId: '507f1f77bcf86cd799439011',
+      input: {
+        isActive: false,
+        orderLimit: 2,
+        marketplaceSellerStock: 0,
+        warrantyId: 272,
+        site: 'digikala',
+        shippingType: 'seller',
+        leadTime: 5,
+        themeValues: [
+          { themeId: 7, themeValueId: 70 },
+          { themeId: 8, themeValueId: 80 },
+        ],
+      },
+      requirements: {
+        lead_time_max: 3,
+        themes: [{ id: 7 }, { id: 8 }],
+      },
+      requirementsFetchedAt: new Date('2026-11-05T00:00:00.000Z'),
+    });
+
+    expect(() => buildVariantPublicationPayload(parsed, 18794338)).toThrow();
+    expect(parsed.requirements?.themes).toHaveLength(2);
+  });
 });
 
 describe('Mongoose models', () => {

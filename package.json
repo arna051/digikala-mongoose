@@ -1,6 +1,6 @@
 {
   "name": "digikala-mongoose",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Mongoose persistence and validation for Digikala-ready product catalogs.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -83,7 +83,7 @@
     "url": "https://github.com/arna051/digikala-mongoose/issues"
   },
   "dependencies": {
-    "digikala": "^0.3.0",
+    "digikala": "^0.5.0",
     "zod": "^4.6.7"
   },
   "peerDependencies": {

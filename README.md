@@ -206,6 +206,11 @@ inside Mongoose middleware.
 
 ## Variants
 
+The persistence model follows Service Hub terminology: DKP is the shared
+product code, while DKPC is the seller/panel-specific variant code stored in a
+publication mapping. A variant can persist the exact requirements snapshot
+used to build it, including zero, one, or two theme dimensions:
+
 Persist a variant before a remote Digikala product exists:
 
 ```ts
@@ -226,6 +231,8 @@ const variant = await digikalaDb.repositories.variants.create({
     packageHeight: 10,
     packageWeight: 330,
   },
+  requirements: requirementsResponse.data,
+  requirementsFetchedAt: new Date(),
 });
 ```
 
@@ -240,8 +247,10 @@ const input = await digikalaDb.repositories.variants.buildPublicationPayload(
 const created = await digikalaClient.variantCreation.create(input);
 ```
 
-The local variant stores no fake remote product ID. The real ID is injected and
-validated only when publishing.
+The local variant stores no fake remote product ID. The real DKP is injected
+only when publishing. If a requirements snapshot exists, payload construction
+also enforces lead-time and dimension limits, required size-guide data,
+mandatory main imagery, and allowed theme IDs before an API call is possible.
 
 ## Updating drafts and mappings
 
